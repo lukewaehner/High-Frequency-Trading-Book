@@ -1,0 +1,33 @@
+
+# === Rust / Cargo ===
+# Compiled files
+/target/
+
+# Build artifacts for examples, benches, tests
+**/*.rs.bk
+
+# Cargo lock file for libraries (keep it for binaries!)
+# If you're building a library crate, uncomment the next line:
+# Cargo.lock
+
+# === IDE / Editor ===
+# VS Code
+.vscode/
+# JetBrains / CLion / IntelliJ
+.idea/
+# Sublime
+*.sublime-workspace
+*.sublime-project
+
+# === OS junk ===
+# macOS
+.DS_Store
+.AppleDouble
+# Windows
+Thumbs.db
+Desktop.ini
+
+# === Logs / Temp ===
+*.log
+*.tmp
+*.mdc
