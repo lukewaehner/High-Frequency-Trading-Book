@@ -31,6 +31,31 @@ impl PriceLevels {
             .or_insert_with(VecDeque::new)
             .push_back(order);
     }
+
+    /// Returns all price levels with their orders
+    pub fn get_price_levels(&self) -> &BTreeMap<i64, VecDeque<Order>> {
+        &self.levels
+    }
+
+    /// Returns the best price for the side without removing anything
+    /// For asks: the lowest price (whatever is first in the BTree)
+    /// For bids: the highest price (whatever is last in the BTree)
+    /// Returns None if no price levels currently exist
+    pub fn best_price(&self) -> Option<i64> {
+        match self.side {
+            Side::Ask => self.levels.first_key_value().map(|(px, _)| *px),
+            Side::Bid => self.levels.last_key_value().map(|(px, _)| *px),
+        }
+    }
+
+    /// Returns how many orders are waiting at best price
+    /// Returns 0 if no price levels currently
+    pub fn best_level_size(&self) -> usize {
+        match self.best_price() {
+            Some(px) => self.levels.get(&px).map(|q| q.len()).unwrap_or(0),
+            None => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +112,100 @@ mod tests {
             vec![1, 2, 3],
             "FIFO must be preserved at a single price"
         );
+    }
+
+    #[test]
+    fn best_level_size_zero_empty() {
+        let bids = PriceLevels::new(Side::Bid);
+        let asks = PriceLevels::new(Side::Ask);
+        assert_eq!(bids.best_level_size(), 0);
+        assert_eq!(asks.best_level_size(), 0);
+    }
+
+    #[test]
+    fn best_level_size_counts_orders() {
+        let mut asks = PriceLevels::new(Side::Ask);
+
+        // Lowest best ask is 10200
+        asks.push(Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10200,
+            qty: 10,
+            ts_ns: 1,
+        });
+
+        // Higher price different time stamp
+        asks.push(Order {
+            id: OrderId(2),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10250,
+            qty: 20,
+            ts_ns: 2,
+        });
+
+        // Same idea
+        asks.push(Order {
+            id: OrderId(3),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10300,
+            qty: 30,
+            ts_ns: 3,
+        });
+
+        assert_eq!(asks.best_level_size(), 1);
+
+        asks.push(Order {
+            id: OrderId(4),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10200,
+            qty: 40,
+            ts_ns: 4,
+        });
+
+        assert_eq!(asks.best_level_size(), 2);
+        assert_eq!(asks.best_price(), Some(10200));
+    }
+
+    #[test]
+    fn best_level_size_counts_orders_ask() {
+        let mut bids = PriceLevels::new(Side::Bid);
+
+        bids.push(Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10100,
+            qty: 10,
+            ts_ns: 1,
+        });
+
+        bids.push(Order {
+            id: OrderId(2),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10050,
+            qty: 20,
+            ts_ns: 2,
+        });
+
+        assert_eq!(bids.best_level_size(), 1);
+
+        bids.push(Order {
+            id: OrderId(3),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10100,
+            qty: 30,
+            ts_ns: 3,
+        });
+
+        assert_eq!(bids.best_level_size(), 2);
+        assert_eq!(bids.best_price(), Some(10100));
     }
 }
 // Use BTreeMap for balanced tree structure
