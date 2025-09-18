@@ -28,7 +28,7 @@ impl PriceLevels {
         // Inserts order to price level, defaults to empty Queue if not
         self.levels
             .entry(order.px_ticks)
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back(order);
     }
 
@@ -55,6 +55,20 @@ impl PriceLevels {
             Some(px) => self.levels.get(&px).map(|q| q.len()).unwrap_or(0),
             None => 0,
         }
+    }
+
+    /// Removes and retusn the queued order at the price
+    /// Returns none for empty book
+    /// Cleans up levels when queue is emptied
+    pub fn pop_best(&mut self) -> Option<Order> {
+        let px = self.best_price()?;
+        let q = self.levels.get_mut(&px)?;
+        let order = q.pop_front();
+        if q.is_empty() {
+            // remove the level if empty to keep balance and speed
+            self.levels.remove(&px);
+        }
+        order
     }
 }
 
@@ -206,6 +220,106 @@ mod tests {
 
         assert_eq!(bids.best_level_size(), 2);
         assert_eq!(bids.best_price(), Some(10100));
+    }
+
+    #[test]
+    fn pop_best_empty() {
+        let mut bids = PriceLevels::new(Side::Bid);
+        assert!(bids.pop_best().is_none());
+        let mut asks = PriceLevels::new(Side::Ask);
+        assert!(asks.pop_best().is_none());
+    }
+
+    #[test]
+    fn pop_best_removes_order_fifo_ask() {
+        let mut asks = PriceLevels::new(Side::Ask);
+
+        // orders at same price, diff stamps
+        asks.push(Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10200,
+            qty: 10,
+            ts_ns: 1,
+        });
+
+        asks.push(Order {
+            id: OrderId(2),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10200,
+            qty: 20,
+            ts_ns: 2,
+        });
+
+        // add a worse order
+        asks.push(Order {
+            id: OrderId(3),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10300,
+            qty: 30,
+            ts_ns: 3,
+        });
+
+        // First pop
+        let o = asks.pop_best().expect("order exists");
+        assert_eq!(o.id.0, 1);
+        assert_eq!(asks.best_price(), Some(10200));
+        assert_eq!(asks.best_level_size(), 1);
+
+        // Second pop, level was cleaned after prev call
+        let o = asks.pop_best().expect("second best");
+        assert_eq!(o.id.0, 2);
+        assert_eq!(asks.best_price(), Some(10300));
+        assert_eq!(asks.best_level_size(), 1);
+    }
+
+    #[test]
+    fn pop_best_removes_order_fifo_bid() {
+        let mut bids = PriceLevels::new(Side::Bid);
+
+        // orders at same price, diff stamps
+        bids.push(Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10200,
+            qty: 10,
+            ts_ns: 1,
+        });
+
+        bids.push(Order {
+            id: OrderId(2),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10200,
+            qty: 20,
+            ts_ns: 2,
+        });
+
+        // add a worse order
+        bids.push(Order {
+            id: OrderId(3),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10100,
+            qty: 30,
+            ts_ns: 3,
+        });
+
+        // First pop
+        let o = bids.pop_best().expect("order exists");
+        assert_eq!(o.id.0, 1);
+        assert_eq!(bids.best_price(), Some(10200));
+        assert_eq!(bids.best_level_size(), 1);
+
+        // Second pop, level was cleaned after prev call
+        let o = bids.pop_best().expect("second best");
+        assert_eq!(o.id.0, 2);
+        assert_eq!(bids.best_price(), Some(10100));
+        assert_eq!(bids.best_level_size(), 1);
     }
 }
 // Use BTreeMap for balanced tree structure

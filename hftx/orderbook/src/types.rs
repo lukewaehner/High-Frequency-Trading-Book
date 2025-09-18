@@ -29,7 +29,6 @@ pub struct Trade {
 
 #[cfg(test)]
 mod tests {}
-use super::*;
 #[test]
 fn test_order_creation() {
     let o = Order {
