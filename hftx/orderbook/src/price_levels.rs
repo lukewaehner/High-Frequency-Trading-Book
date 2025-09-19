@@ -1,5 +1,5 @@
-use crate::types::{Order, Side};
-use std::collections::{BTreeMap, VecDeque};
+use crate::types::{Order, OrderId, Side};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 // Structured price levels based, FIFO tracking with BTreeMap
 // side determines which end of the map is the best
@@ -11,6 +11,7 @@ pub struct PriceLevels {
     /// price ticks (i64) mapped to orders at the price
     /// stored in a queu or orders waiting to be filled
     levels: BTreeMap<i64, VecDeque<Order>>,
+    canceled: HashSet<OrderId>,
 }
 
 impl PriceLevels {
@@ -19,6 +20,7 @@ impl PriceLevels {
         Self {
             side,
             levels: BTreeMap::new(),
+            canceled: HashSet::new(),
         }
     }
 
@@ -43,7 +45,9 @@ impl PriceLevels {
     /// Returns None if no price levels currently exist
     pub fn best_price(&self) -> Option<i64> {
         match self.side {
+            // grab the first item in the Bal tree for asks (cheapest)
             Side::Ask => self.levels.first_key_value().map(|(px, _)| *px),
+            // grab the last item in the Bal tree for bids (most expensive)
             Side::Bid => self.levels.last_key_value().map(|(px, _)| *px),
         }
     }
@@ -61,14 +65,41 @@ impl PriceLevels {
     /// Returns none for empty book
     /// Cleans up levels when queue is emptied
     pub fn pop_best(&mut self) -> Option<Order> {
-        let px = self.best_price()?;
-        let q = self.levels.get_mut(&px)?;
-        let order = q.pop_front();
-        if q.is_empty() {
-            // remove the level if empty to keep balance and speed
-            self.levels.remove(&px);
+        loop {
+            let px = self.best_price()?;
+            let q = match self.levels.get_mut(&px) {
+                Some(q) => q,
+                None => return None, // should not happen
+            };
+
+            // Remove cancelled orders at front
+            while let Some(front) = q.front() {
+                if self.canceled.contains(&front.id) {
+                    q.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            // clean up empty level if one left
+            if let Some(order) = q.pop_front() {
+                // now empty? yes -> clean
+                if q.is_empty() {
+                    self.levels.remove(&px);
+                }
+                return Some(order);
+            } else {
+                // it was empty already
+                self.levels.remove(&px);
+            }
         }
-        order
+    }
+
+    /// Sets an order to be canceled
+    /// Lazy removal, we remove during pop_best
+    /// Trye if Id was not cancled before, false if already
+    pub fn cancel(&mut self, id: OrderId) -> bool {
+        self.canceled.insert(id)
     }
 }
 
@@ -321,7 +352,72 @@ mod tests {
         assert_eq!(bids.best_price(), Some(10100));
         assert_eq!(bids.best_level_size(), 1);
     }
+
+    #[test]
+    fn cancel_removes_order() {
+        let mut bids = PriceLevels::new(Side::Bid);
+
+        let o1 = Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10100,
+            qty: 10,
+            ts_ns: 1,
+        };
+        let o2 = Order {
+            id: OrderId(2),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10100,
+            qty: 20,
+            ts_ns: 2,
+        };
+        let o3 = Order {
+            id: OrderId(3),
+            symbol: "NVDA".into(),
+            side: Side::Bid,
+            px_ticks: 10050,
+            qty: 30,
+            ts_ns: 3,
+        };
+
+        bids.push(o1.clone());
+        bids.push(o2.clone());
+        bids.push(o3.clone());
+
+        assert!(bids.cancel(OrderId(2)));
+
+        let first = bids.pop_best().expect("first order");
+        assert_eq!(first.id.0, 1);
+
+        let second = bids.pop_best().expect("second order");
+        assert_eq!(second.id.0, 3);
+
+        // empty here
+        assert!(bids.pop_best().is_none());
+    }
+
+    #[test]
+    fn cancel_empty_false() {
+        let mut asks = PriceLevels::new(Side::Ask);
+        // Empty book, trying to cancel returns false
+        assert!(!asks.cancel(OrderId(2)));
+
+        let o1 = Order {
+            id: OrderId(1),
+            symbol: "NVDA".into(),
+            side: Side::Ask,
+            px_ticks: 10200,
+            qty: 10,
+            ts_ns: 1,
+        };
+        asks.push(o1);
+        // you have something and can cancel it? returns true
+        assert!(asks.cancel(OrderId(1)));
+    }
 }
+
 // Use BTreeMap for balanced tree structure
 // levels.keys().next() for lowest price
 // levels.keys().next_back() for highest price
