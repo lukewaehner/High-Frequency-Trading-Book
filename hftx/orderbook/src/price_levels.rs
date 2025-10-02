@@ -1,5 +1,5 @@
 use crate::types::{Order, OrderId, Side};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 // Structured price levels based, FIFO tracking with BTreeMap
 // side determines which end of the map is the best
@@ -11,6 +11,7 @@ pub struct PriceLevels {
     /// price ticks (i64) mapped to orders at the price
     /// stored in a queu or orders waiting to be filled
     levels: BTreeMap<i64, VecDeque<Order>>,
+    index: HashMap<OrderId, i64>,
     canceled: HashSet<OrderId>,
 }
 
@@ -20,6 +21,7 @@ impl PriceLevels {
         Self {
             side,
             levels: BTreeMap::new(),
+            index: HashMap::new(),
             canceled: HashSet::new(),
         }
     }
@@ -27,11 +29,26 @@ impl PriceLevels {
     /// Adds an order at the price level, keep FIFO intact
     /// create price level if not existing
     pub fn push(&mut self, order: Order) {
+        debug_assert!(
+            !self.index.contains_key(&order.id),
+            "duplicate order id exists"
+        );
         // Inserts order to price level, defaults to empty Queue if not
+        self.index.insert(order.id, order.px_ticks);
         self.levels
             .entry(order.px_ticks)
             .or_default()
             .push_back(order);
+    }
+
+    /// Reinsert order at front of its price level (partial fill case)
+    /// Keep FIFO for same order already at front
+    pub fn push_front(&mut self, order: Order) {
+        self.index.insert(order.id, order.px_ticks);
+        self.levels
+            .entry(order.px_ticks)
+            .or_default()
+            .push_front(order);
     }
 
     /// Returns all price levels with their orders
@@ -66,6 +83,7 @@ impl PriceLevels {
     /// Cleans up levels when queue is emptied
     pub fn pop_best(&mut self) -> Option<Order> {
         loop {
+            // grabs the bes tprice and quantity of the order passed in
             let px = self.best_price()?;
             let q = match self.levels.get_mut(&px) {
                 Some(q) => q,
@@ -73,10 +91,12 @@ impl PriceLevels {
             };
 
             // Remove cancelled orders at front
-            while let Some(front) = q.front() {
-                if self.canceled.contains(&front.id) {
-                    q.pop_front();
+            while let Some(order) = q.pop_front() {
+                if self.canceled.remove(&order.id) {
+                    self.index.remove(&order.id);
+                    continue; // keep removing
                 } else {
+                    q.push_front(order); // put back
                     break;
                 }
             }
@@ -84,6 +104,7 @@ impl PriceLevels {
             // clean up empty level if one left
             if let Some(order) = q.pop_front() {
                 // now empty? yes -> clean
+                self.index.remove(&order.id); // already removed if canceled
                 if q.is_empty() {
                     self.levels.remove(&px);
                 }
@@ -99,8 +120,100 @@ impl PriceLevels {
     /// Lazy removal, we remove during pop_best
     /// Trye if Id was not cancled before, false if already
     pub fn cancel(&mut self, id: OrderId) -> bool {
-        self.canceled.insert(id)
+        if self.index.remove(&id).is_some() {
+            self.canceled.insert(id)
+        } else {
+            return false;
+        }
     }
+
+    /// True if an order id is present in this side
+    pub fn contains(&self, id: OrderId) -> bool {
+        self.index.contains_key(&id) && !self.canceled.contains(&id)
+    }
+
+    /// Total resting orders (count of orders, not price levels).
+    pub fn total_len(&self) -> usize {
+        self.levels.values().map(|q| q.len()).sum::<usize>() - self.canceled.len()
+    }
+
+    /// Peek (borrow) the best order without removing it.
+    pub fn peek_best(&self) -> Option<&Order> {
+        let px = self.best_price()?;
+        let q = self.levels.get(&px)?;
+        
+        for order in q {
+            if !self.canceled.contains(&order.id) {
+                return Some(order);
+            }
+        }
+        None
+    }
+
+    /// Sum quantity available at a specific price level.
+    pub fn qty_at_price(&self, px_ticks: i64) -> i64 {
+        self.levels.get(&px_ticks)
+            .map(|q| q.iter()
+                .filter(|order| !self.canceled.contains(&order.id))
+                .map(|order| order.qty)
+                .sum())
+            .unwrap_or(0)
+    }
+
+    /// Iterate prices in matching priority (best→worst) with total qty per price.
+    pub fn iter_levels_best_first(&self) -> Box<dyn Iterator<Item = (i64, i64)> + '_> {
+        match self.side {
+            Side::Ask => {
+                Box::new(self.levels.iter().map(move |(px, q)| {
+                    let total_qty: i64 = q.iter()
+                        .filter(|order| !self.canceled.contains(&order.id))
+                        .map(|order| order.qty)
+                        .sum();
+                    (*px, total_qty)
+                }))
+            }
+            Side::Bid => {
+                Box::new(self.levels.iter().rev().map(move |(px, q)| {
+                    let total_qty: i64 = q.iter()
+                        .filter(|order| !self.canceled.contains(&order.id))
+                        .map(|order| order.qty)
+                        .sum();
+                    (*px, total_qty)
+                }))
+            }
+        }
+    }
+
+    /// Remove a specific order by id (eager cancel).
+    /// Returns the removed order if found (useful for amendments).
+    pub fn remove(&mut self, id: OrderId) -> Option<Order> {
+        let px_ticks = self.index.remove(&id)?;
+        self.canceled.remove(&id);
+        
+        let q = self.levels.get_mut(&px_ticks)?;
+        let mut found_order = None;
+        
+        let mut temp_orders = Vec::new();
+        while let Some(order) = q.pop_front() {
+            if order.id == id {
+                found_order = Some(order);
+                break;
+            } else {
+                temp_orders.push(order);
+            }
+        }
+        
+        for order in temp_orders.into_iter().rev() {
+            q.push_front(order);
+        }
+        
+        if q.is_empty() {
+            self.levels.remove(&px_ticks);
+        }
+        
+        found_order
+    }
+
 }
 
 #[cfg(test)]
