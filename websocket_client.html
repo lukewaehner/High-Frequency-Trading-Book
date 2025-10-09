@@ -593,7 +593,7 @@
             const trade = data.trade;
             logMessage(
               "trade",
-              `🔥 TRADE EXECUTED: ${trade.qty} shares @ ${trade.px_ticks}`,
+              `TRADE EXECUTED: ${trade.qty} shares @ ${trade.px_ticks}`,
               "match"
             );
             logMessage(
@@ -711,20 +711,20 @@
           if (result.trades && result.trades.length > 0) {
             logMessage(
               "trade",
-              `✅ ${sideText} ${quantity} @ ${price} → FILLED (${result.trades.length} trades)`,
+              `${sideText} ${quantity} @ ${price} → FILLED (${result.trades.length} trades)`,
               "match"
             );
           } else {
             logMessage(
               "trade",
-              `📝 ${sideText} ${quantity} @ ${price} → RESTED`,
+              `${sideText} ${quantity} @ ${price} → RESTED`,
               "info"
             );
           }
 
           return result;
         } catch (error) {
-          logMessage("trade", `❌ Order failed: ${error.message}`, "error");
+          logMessage("trade", `Order failed: ${error.message}`, "error");
           throw error;
         }
       }
@@ -745,7 +745,7 @@
       }
 
       async function demoMatching() {
-        logMessage("trade", "🎯 Starting Price Matching Demo...", "match");
+        logMessage("trade", "Starting Price Matching Demo...", "match");
 
         try {
           // Step 1: Add a resting ask order
@@ -772,11 +772,11 @@
 
           logMessage(
             "trade",
-            "✅ Demo complete! Check the trade stream above for matches.",
+            "Demo complete! Check the trade stream above for matches.",
             "match"
           );
         } catch (error) {
-          logMessage("trade", `❌ Demo failed: ${error.message}`, "error");
+          logMessage("trade", `Demo failed: ${error.message}`, "error");
         }
       }
 

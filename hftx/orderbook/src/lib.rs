@@ -1,11 +1,9 @@
 //! High-frequency trading order book with price-time priority matching.
 //!
-//! Core features:
+//! Features:
 //! - Price-time priority matching (best price first, then FIFO)
 //! - Partial fills and immediate execution
 //! - Lazy cancellation for performance
-//! - ~100ns order submission, >100k orders/sec sustained throughput
-
 pub mod types;
 
 pub use types::{Order, OrderId, Side, Trade};

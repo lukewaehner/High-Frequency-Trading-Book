@@ -516,11 +516,4 @@ cargo run -- status --symbol AAPL
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments
-
-- Built with [Rust](https://www.rust-lang.org/) for memory safety and performance
-- Uses [Axum](https://github.com/tokio-rs/axum) for high-performance HTTP handling
-- Benchmarked with [Criterion](https://github.com/bheisler/criterion.rs)
-- Concurrent data structures from [DashMap](https://github.com/xacrimon/dashmap)
-
 ---

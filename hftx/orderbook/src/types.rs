@@ -1,6 +1,6 @@
 //! Core data types for the order book.
 //!
-//! All types use integer ticks for prices to avoid floating-point precision issues.
+//! All types use integer ticks for prices
 //! Timestamps are nanoseconds since epoch for high-precision time priority.
 
 use serde::{Deserialize, Serialize};

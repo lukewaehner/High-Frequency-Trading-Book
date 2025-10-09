@@ -16,7 +16,7 @@ use crate::{types::*, AppState};
 /// Streams trade executions immediately as they occur. Includes ping/pong
 /// heartbeat for connection health monitoring.
 pub async fn handle_trade_stream(socket: WebSocket, symbol: String, state: AppState) {
-    info!("🔗 New trade stream connection for {}", symbol);
+    info!("New trade stream connection for {}", symbol);
     
     let (mut sender, mut receiver) = socket.split();
     let mut trade_rx = state.trade_broadcaster.subscribe();
@@ -92,7 +92,7 @@ pub async fn handle_trade_stream(socket: WebSocket, symbol: String, state: AppSt
         }
     }
     
-    info!("✅ Trade stream handler ended for {}", symbol);
+    info!("Trade stream handler ended for {}", symbol);
 }
 
 /// Handles real-time market depth streaming for a symbol.
@@ -100,7 +100,7 @@ pub async fn handle_trade_stream(socket: WebSocket, symbol: String, state: AppSt
 /// Sends depth updates at 10 Hz (every 100ms) but only when prices change.
 /// Includes initial snapshot on connection.
 pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppState) {
-    info!("📊 New depth stream connection for {}", symbol);
+    info!("New depth stream connection for {}", symbol);
     
     let (mut sender, mut receiver) = socket.split();
     let mut update_interval = interval(Duration::from_millis(100)); // 10 Hz
@@ -132,7 +132,7 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
 
     loop {
         tokio::select! {
-            // Handle incoming messages (same as trade stream)
+            // Handle incoming messages
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -200,7 +200,7 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
                 }
             }
             
-            // Send periodic heartbeat pings
+            // Test connection alive
             _ = ping_interval.tick() => {
                 let ping = WebSocketMessage::Ping {
                     timestamp: SystemTime::now()

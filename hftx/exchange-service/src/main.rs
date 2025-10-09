@@ -1,3 +1,8 @@
+//! HFT Exchange Service - REST API and WebSocket server for trading operations.
+//!
+//! Provides HTTP endpoints for order management and WebSocket streams for real-time
+//! market data. Built with Axum for high-performance async request handling.
+
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
@@ -66,16 +71,21 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Application state shared across all handlers.
 #[derive(Clone)]
 struct AppState {
+    /// Exchange engine managing order books
     exchange: Arc<Exchange>,
+    /// Broadcast channel for real-time trade events
     trade_broadcaster: broadcast::Sender<TradeEvent>,
 }
 
+/// Serves the web trading interface.
 async fn serve_frontend() -> impl IntoResponse {
     Html(include_str!("../static/index.html"))
 }
 
+/// Health check endpoint returning service status.
 async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "healthy",
@@ -85,11 +95,13 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
+/// Lists all available trading symbols.
 async fn list_symbols(State(state): State<AppState>) -> impl IntoResponse {
     let symbols = state.exchange.list_symbols().await;
     Json(SymbolsResponse { symbols })
 }
 
+/// Gets current order book state for a symbol.
 async fn get_orderbook(
     Path(symbol): Path<String>,
     State(state): State<AppState>,
@@ -100,6 +112,7 @@ async fn get_orderbook(
     Ok(Json(orderbook_state))
 }
 
+/// Gets market depth for a symbol.
 async fn get_depth(
     Path(symbol): Path<String>,
     Query(params): Query<DepthQuery>,
@@ -111,6 +124,7 @@ async fn get_depth(
     Ok(Json(depth))
 }
 
+/// Submits a new limit order to the exchange.
 async fn submit_order(
     Path(symbol): Path<String>,
     State(state): State<AppState>,
@@ -149,6 +163,7 @@ async fn submit_order(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+/// Cancels an existing order by ID.
 async fn cancel_order(
     Path((symbol, order_id)): Path<(String, String)>,
     State(state): State<AppState>,
@@ -166,6 +181,7 @@ async fn cancel_order(
     }
 }
 
+/// WebSocket handler for real-time trade streaming.
 async fn trade_stream(
     Path(symbol): Path<String>,
     ws: WebSocketUpgrade,
@@ -174,6 +190,7 @@ async fn trade_stream(
     ws.on_upgrade(move |socket| websocket::handle_trade_stream(socket, symbol, state))
 }
 
+/// WebSocket handler for real-time market depth streaming.
 async fn depth_stream(
     Path(symbol): Path<String>,
     ws: WebSocketUpgrade,
@@ -182,6 +199,7 @@ async fn depth_stream(
     ws.on_upgrade(move |socket| websocket::handle_depth_stream(socket, symbol, state))
 }
 
+/// Application error types for HTTP responses.
 #[derive(Debug)]
 enum AppError {
     SymbolNotFound,

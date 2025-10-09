@@ -530,8 +530,3 @@ mod tests {
         assert!(asks.cancel(OrderId(1)));
     }
 }
-
-// Use BTreeMap for balanced tree structure
-// levels.keys().next() for lowest price
-// levels.keys().next_back() for highest price
-// O(1) access to price levels (ask or bid)
