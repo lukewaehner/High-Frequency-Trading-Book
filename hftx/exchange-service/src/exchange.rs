@@ -11,7 +11,7 @@
 
 use dashmap::DashMap;
 use orderbook::{OrderBook, Order, OrderId, Side, Trade};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use crate::types::{OrderBookState, MarketDepth, PriceLevel};
@@ -162,13 +162,35 @@ impl Exchange {
     /// * `None` - If symbol doesn't exist
     pub async fn submit_order(&self, symbol: String, order: Order) -> Option<Vec<Trade>> {
         let orderbook_lock = self.orderbooks.get(&symbol)?;
-        
+
         // Acquire write lock
         let mut orderbook = orderbook_lock.write().await;
-        
+
         // Submit limit order
         let trades = orderbook.submit_limit(order);
         Some(trades)
+    }
+
+    /// Submits a batch of orders to a single symbol's order book under one
+    /// write lock. Returns per-order (trades, engine_ns) where engine_ns is
+    /// the monotonic time spent inside `submit_limit` for that order only —
+    /// the number to plot in a "true engine latency" histogram.
+    pub async fn submit_order_batch(
+        &self,
+        symbol: &str,
+        orders: Vec<Order>,
+    ) -> Option<Vec<(Vec<Trade>, u128)>> {
+        let orderbook_lock = self.orderbooks.get(symbol)?;
+        let mut orderbook = orderbook_lock.write().await;
+
+        let mut out = Vec::with_capacity(orders.len());
+        for order in orders {
+            let t0 = Instant::now();
+            let trades = orderbook.submit_limit(order);
+            let latency_ns = t0.elapsed().as_nanos();
+            out.push((trades, latency_ns));
+        }
+        Some(out)
     }
 
     /// Cancels an existing order from the specified symbol's order book.

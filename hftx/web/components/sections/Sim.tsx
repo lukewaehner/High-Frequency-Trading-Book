@@ -7,6 +7,7 @@ import { percentile, useLatencyStore, useSimStore } from "@/lib/store";
 import { formatNs, formatThroughput } from "@/lib/format";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import { SectionLabel } from "@/components/ui/primitives";
+import { Reveal } from "@/components/ui/Reveal";
 
 export function Sim() {
   const running = useSimStore((s) => s.running);
@@ -38,18 +39,29 @@ export function Sim() {
       <div className="mx-auto max-w-[1400px] px-6 py-20 md:px-10 md:py-32">
         <header className="mb-12 grid grid-cols-1 gap-6 md:grid-cols-12 md:items-end">
           <div className="md:col-span-7">
-            <SectionLabel index="02 / Simulation" title="Stress the engine" />
-            <h2 className="mt-5 max-w-[16ch] font-display text-4xl font-extrabold leading-[0.95] tracking-tighter text-fg md:text-6xl">
-              Spawn flow.
-              <br />
-              <span className="text-amber">Watch it absorb.</span>
-            </h2>
+            <Reveal direction="left">
+              <SectionLabel
+                index="02 / Simulation"
+                title="Stress the engine"
+              />
+            </Reveal>
+            <Reveal direction="up" delay={0.1}>
+              <h2 className="mt-5 max-w-[16ch] font-display text-4xl font-extrabold leading-[0.95] tracking-tighter text-fg md:text-6xl">
+                Spawn flow.
+                <br />
+                <span className="text-amber">Watch it absorb.</span>
+              </h2>
+            </Reveal>
           </div>
-          <p className="max-w-[44ch] text-[14px] leading-relaxed text-fg-muted md:col-span-5 md:text-[15px]">
+          <Reveal
+            direction="up"
+            delay={0.18}
+            className="max-w-[44ch] text-[14px] leading-relaxed text-fg-muted md:col-span-5 md:text-[15px]"
+          >
             Synthetic market makers quote around mid; takers cross the spread
             on a Poisson tick. Push the sliders. The engine doesn&rsquo;t care
             what you throw at it.
-          </p>
+          </Reveal>
         </header>
 
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">

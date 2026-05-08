@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { submitOrderTimed } from "@/lib/exchange";
+import { submitOrderBatch } from "@/lib/exchange";
 import {
   SEED_MID_TICKS,
   type SubmitSample,
@@ -11,11 +11,10 @@ import {
 } from "@/lib/store";
 import type { Side } from "@/lib/types";
 
-// Cap on simultaneous in-flight HTTP requests to avoid unbounded queue growth.
-// Browsers limit HTTP/1.1 to ~6 concurrent connections per origin, so anything
-// past that queues at the network layer regardless. We cap higher to absorb
-// burst spikes without dropping ticks too aggressively.
-const MAX_INFLIGHT = 256;
+// Cap on simultaneous in-flight batch requests. Each batch carries an entire
+// tick's orders, so 2 is enough to absorb a slow round-trip without queueing
+// up unbounded backlog when the user cranks tick rate or order counts.
+const MAX_INFLIGHT_BATCHES = 2;
 
 type Order = { side: Side; price: number; quantity: number };
 
@@ -59,19 +58,22 @@ export function SimEngine() {
       return;
     }
 
-    const dispatch = (order: Order) => {
-      if (inflightRef.current >= MAX_INFLIGHT) {
-        droppedRef.current++;
+    const dispatchBatch = (orders: Order[]) => {
+      if (orders.length === 0) return;
+      if (inflightRef.current >= MAX_INFLIGHT_BATCHES) {
+        droppedRef.current += orders.length;
         return;
       }
       inflightRef.current++;
       const symbol = useMarketStore.getState().symbol;
-      submitOrderTimed(symbol, order)
+      submitOrderBatch(symbol, orders)
         .then((res) => {
-          pendingRef.current.push({
-            ns: res.latency_ns,
-            filled: res.trades.length > 0,
-          });
+          // Each entry's latency_ns is the engine's monotonic time inside
+          // submit_limit for that order — the histogram's source of truth.
+          for (let i = 0; i < res.results.length; i++) {
+            const r = res.results[i];
+            pendingRef.current.push({ ns: r.latency_ns, filled: r.filled });
+          }
         })
         .catch(() => {
           // engine offline / 404 — drop silently
@@ -89,7 +91,6 @@ export function SimEngine() {
           : SEED_MID_TICKS;
       const aggrFactor = aggression / 100;
 
-      // Build all orders for this tick synchronously, then dispatch in parallel.
       const orders: Order[] = [];
 
       for (let i = 0; i < makerCount; i++) {
@@ -126,11 +127,9 @@ export function SimEngine() {
         orders.push({ side, price, quantity });
       }
 
-      // Fire all in parallel, fire-and-forget. Latency samples buffer to
-      // pendingRef and are batched into the store on the next RAF.
-      for (let i = 0; i < orders.length; i++) {
-        dispatch(orders[i]);
-      }
+      // One HTTP request, N orders. Server processes them under a single
+      // write lock and returns engine-measured per-order latency.
+      dispatchBatch(orders);
     };
 
     intervalRef.current = setInterval(tick, tickMs);

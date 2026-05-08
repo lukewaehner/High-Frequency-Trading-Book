@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::CorsLayer;
@@ -42,6 +42,7 @@ async fn main() {
         .route("/symbols/:symbol/orderbook", get(get_orderbook))
         .route("/symbols/:symbol/depth", get(get_depth))
         .route("/symbols/:symbol/orders", post(submit_order))
+        .route("/symbols/:symbol/orders/batch", post(submit_order_batch))
         .route("/symbols/:symbol/orders/:order_id", delete(cancel_order))
         .route("/symbols/:symbol/trades/stream", get(trade_stream))
         .route("/symbols/:symbol/depth/stream", get(depth_stream))
@@ -64,6 +65,7 @@ async fn main() {
     info!("  GET  /symbols/:symbol/orderbook - Get order book state");
     info!("  GET  /symbols/:symbol/depth - Get market depth");
     info!("  POST /symbols/:symbol/orders - Submit order");
+    info!("  POST /symbols/:symbol/orders/batch - Submit batch of orders");
     info!("  DEL  /symbols/:symbol/orders/:id - Cancel order");
     info!("  WS   /symbols/:symbol/trades/stream - Trade stream");
     info!("  WS   /symbols/:symbol/depth/stream - Depth stream");
@@ -161,6 +163,67 @@ async fn submit_order(
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Submits a batch of orders to a single symbol under one write lock.
+/// Returns per-order results with engine-measured latency_ns. Trade objects
+/// are still broadcast on the WS stream; the response carries trade *count*
+/// only to keep the wire small under high tick rates.
+async fn submit_order_batch(
+    Path(symbol): Path<String>,
+    State(state): State<AppState>,
+    Json(request): Json<BatchSubmitRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+
+    let mut order_ids = Vec::with_capacity(request.orders.len());
+    let mut orders = Vec::with_capacity(request.orders.len());
+    for req in request.orders {
+        let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
+        order_ids.push(order_id.0);
+        orders.push(Order {
+            id: order_id,
+            symbol: symbol.clone(),
+            side: req.side,
+            px_ticks: req.price,
+            qty: req.quantity,
+            ts_ns: now_ns,
+        });
+    }
+
+    let batch_t0 = Instant::now();
+    let per_order = state
+        .exchange
+        .submit_order_batch(&symbol, orders)
+        .await
+        .ok_or(AppError::SymbolNotFound)?;
+    let engine_ns = batch_t0.elapsed().as_nanos();
+
+    let mut results = Vec::with_capacity(per_order.len());
+    for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
+        let trade_count = trades.len();
+        let filled = trade_count > 0;
+
+        for trade in trades {
+            let _ = state.trade_broadcaster.send(TradeEvent {
+                symbol: symbol.clone(),
+                trade,
+                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+            });
+        }
+
+        results.push(BatchOrderResult {
+            order_id: order_ids[idx],
+            filled,
+            trade_count,
+            latency_ns,
+        });
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(BatchSubmitResponse { results, engine_ns }),
+    ))
 }
 
 /// Cancels an existing order by ID.

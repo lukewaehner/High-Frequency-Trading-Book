@@ -52,6 +52,24 @@ export interface SubmitOrderResponse {
   trades: Trade[];
 }
 
+export interface BatchSubmitRequest {
+  orders: SubmitOrderRequest[];
+}
+
+export interface BatchOrderResult {
+  order_id: number;
+  filled: boolean;
+  trade_count: number;
+  /** Engine-side processing time for this order in nanoseconds. */
+  latency_ns: number;
+}
+
+export interface BatchSubmitResponse {
+  results: BatchOrderResult[];
+  /** Wall time inside the server handler covering the entire batch. */
+  engine_ns: number;
+}
+
 export interface SymbolsResponse {
   symbols: string[];
 }

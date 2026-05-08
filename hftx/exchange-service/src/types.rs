@@ -19,6 +19,33 @@ pub struct SubmitOrderResponse {
     pub trades: Vec<Trade>, // Any immediate executions
 }
 
+/// Batch order submission. Orders are processed in array order under a single
+/// write lock per book, amortizing lock + JSON-parse cost across the batch.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchSubmitRequest {
+    pub orders: Vec<SubmitOrderRequest>,
+}
+
+/// Per-order outcome inside a batch response. Trade count rather than full
+/// trades keeps the wire payload compact under high tick rates; clients that
+/// need trade detail should read the trade WS stream.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchOrderResult {
+    pub order_id: u128,
+    pub filled: bool,
+    pub trade_count: usize,
+    /// Engine-side processing time for this order in nanoseconds.
+    pub latency_ns: u128,
+}
+
+/// Aggregate batch response. `engine_ns` is wall time inside the handler
+/// covering the full batch (lock + matching + broadcast).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchSubmitResponse {
+    pub results: Vec<BatchOrderResult>,
+    pub engine_ns: u128,
+}
+
 /// Query parameters for market depth requests.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DepthQuery {

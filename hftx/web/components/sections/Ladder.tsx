@@ -6,6 +6,7 @@ import { useMarketStore } from "@/lib/store";
 import { formatPrice, formatQty } from "@/lib/format";
 import type { PriceLevel } from "@/lib/types";
 import { SectionLabel } from "@/components/ui/primitives";
+import { Reveal } from "@/components/ui/Reveal";
 import { TradeTape } from "./TradeTape";
 import { OrderEntry } from "./OrderEntry";
 
@@ -40,19 +41,27 @@ export function Ladder() {
       <div className="mx-auto max-w-[1400px] px-6 py-20 md:px-10 md:py-32">
         <header className="mb-10 grid grid-cols-1 gap-6 md:grid-cols-12 md:items-end">
           <div className="md:col-span-7">
-            <SectionLabel
-              index="01 / Ladder"
-              title="Price discovery, in motion"
-            />
-            <h2 className="mt-5 max-w-[18ch] font-display text-4xl font-extrabold leading-[0.95] tracking-tighter text-fg md:text-6xl">
-              The book is the truth.
-            </h2>
+            <Reveal direction="left">
+              <SectionLabel
+                index="01 / Ladder"
+                title="Price discovery, in motion"
+              />
+            </Reveal>
+            <Reveal direction="up" delay={0.1}>
+              <h2 className="mt-5 max-w-[18ch] font-display text-4xl font-extrabold leading-[0.95] tracking-tighter text-fg md:text-6xl">
+                The book is the truth.
+              </h2>
+            </Reveal>
           </div>
-          <p className="max-w-[44ch] text-[14px] leading-relaxed text-fg-muted md:col-span-5 md:text-[15px]">
+          <Reveal
+            direction="up"
+            delay={0.18}
+            className="max-w-[44ch] text-[14px] leading-relaxed text-fg-muted md:col-span-5 md:text-[15px]"
+          >
             What you see below is live, polled four times per second, with
             top-of-book streamed continuously. Every price level is a queue;
             every queue is FIFO. The engine matches at the maker&rsquo;s price.
-          </p>
+          </Reveal>
         </header>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">

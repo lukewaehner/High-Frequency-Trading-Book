@@ -2,6 +2,8 @@
 // Default endpoint is localhost:8080. Override with NEXT_PUBLIC_HFTX_URL.
 
 import type {
+  BatchSubmitRequest,
+  BatchSubmitResponse,
   DepthStreamMsg,
   MarketDepth,
   OrderBookState,
@@ -96,6 +98,38 @@ export async function submitOrderTimed(
   const result = await submitOrder(symbol, req, signal);
   const latency_ns = (performance.now() - t0) * 1_000_000;
   return { ...result, latency_ns };
+}
+
+export interface BatchSubmitWithRtt extends BatchSubmitResponse {
+  /** Wall round-trip across the network for the entire batch, in nanoseconds. */
+  rtt_ns: number;
+}
+
+/**
+ * Submits a batch of orders for one symbol in a single HTTP request. The
+ * server processes them under one write lock and returns engine-measured
+ * per-order latency_ns — the histogram-worthy number, untainted by network
+ * RTT. Intended for the sim driver where one tick produces N orders.
+ */
+export async function submitOrderBatch(
+  symbol: string,
+  orders: SubmitOrderRequest[],
+  signal?: AbortSignal,
+): Promise<BatchSubmitWithRtt> {
+  const t0 = performance.now();
+  const body: BatchSubmitRequest = { orders };
+  const res = await fetch(
+    `${REST_BASE}/symbols/${encodeURIComponent(symbol)}/orders/batch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    },
+  );
+  const result = await jsonOrThrow<BatchSubmitResponse>(res);
+  const rtt_ns = (performance.now() - t0) * 1_000_000;
+  return { ...result, rtt_ns };
 }
 
 // WebSocket helpers ----------------------------------------------------------

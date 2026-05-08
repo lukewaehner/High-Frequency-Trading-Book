@@ -28,6 +28,11 @@
     0 8px 24px -8px oklch(0.1 0 0 / 0.5);
   --shadow-amber-inner: inset 0 1px 0 oklch(1 0 0 / 0.08),
     inset 0 -1px 0 oklch(0 0 0 / 0.4);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-quart: cubic-bezier(0.5, 0, 0.75, 0);
 }
 
 * {
