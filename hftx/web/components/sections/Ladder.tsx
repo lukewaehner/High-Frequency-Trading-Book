@@ -64,6 +64,7 @@ export function Ladder() {
   const stale = connected && staleMs > STALE_AFTER_MS;
 
   const symbolMatches = lastTrade?.symbol === symbol;
+  const bookEmpty = visibleBids.length === 0 && visibleAsks.length === 0;
 
   return (
     <section
@@ -103,6 +104,13 @@ export function Ladder() {
           </Reveal>
         </header>
 
+        {bookEmpty && (
+          <div className="mb-6 flex items-center justify-center gap-3 rounded-md border border-dashed border-line-soft bg-bg-sunken/40 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
+            <Pulse on={false} />
+            <span>Awaiting liquidity — start the sim, or send a bid below</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Bids */}
           <div className="lg:col-span-5">
@@ -124,7 +132,7 @@ export function Ladder() {
                   />
                 ))}
               </AnimatePresence>
-              {visibleBids.length === 0 && <EmptyRows side="bid" />}
+              {visibleBids.length === 0 && <SkeletonRows side="bid" />}
             </ul>
           </div>
 
@@ -163,7 +171,7 @@ export function Ladder() {
                   />
                 ))}
               </AnimatePresence>
-              {visibleAsks.length === 0 && <EmptyRows side="ask" />}
+              {visibleAsks.length === 0 && <SkeletonRows side="ask" />}
             </ul>
           </div>
 
@@ -308,16 +316,42 @@ function ColumnHeader({ side }: { side: "bid" | "ask" }) {
   );
 }
 
-function EmptyRows({ side }: { side: "bid" | "ask" }) {
+function SkeletonRows({ side }: { side: "bid" | "ask" }) {
+  const isBid = side === "bid";
   return (
-    <li
-      className={cn(
-        "flex h-[280px] items-center justify-center font-mono text-[11px] uppercase tracking-[0.18em] text-fg-dim",
-        side === "bid" ? "text-left" : "text-right",
-      )}
-    >
-      Awaiting liquidity. Start the sim or place an order.
-    </li>
+    <>
+      {Array.from({ length: VISIBLE_LEVELS }).map((_, i) => {
+        // Centered rows are most prominent; rows further from the spread fade.
+        const distance = Math.abs(i - VISIBLE_LEVELS / 2 + 0.5);
+        const opacity = 0.16 - distance * 0.012;
+        return (
+          <li
+            key={`skel-${side}-${i}`}
+            className="relative flex h-9 items-center px-3 font-mono text-[13px] tabular-nums"
+            aria-hidden
+          >
+            <div
+              className={cn(
+                "flex w-full items-baseline gap-4",
+                isBid && "flex-row-reverse",
+              )}
+              style={{ opacity }}
+            >
+              <span
+                className={cn(
+                  "flex-1 text-fg-dim",
+                  isBid ? "text-right" : "text-left",
+                )}
+              >
+                ‒‒‒‒.‒‒
+              </span>
+              <span className="text-fg-dim">‒‒‒</span>
+              <span className="w-6 text-right text-[11px] text-fg-dim">‒</span>
+            </div>
+          </li>
+        );
+      })}
+    </>
   );
 }
 

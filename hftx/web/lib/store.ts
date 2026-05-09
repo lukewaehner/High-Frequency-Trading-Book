@@ -23,6 +23,7 @@ interface MarketState {
   asks: PriceLevel[];
   trades: Trade[]; // newest first, capped
   lastTradeTs: number | null;
+  acceptingTrades: boolean;
 
   setSymbol: (s: string) => void;
   setConnected: (b: boolean) => void;
@@ -34,11 +35,13 @@ interface MarketState {
   ) => void;
   setLadder: (bids: PriceLevel[], asks: PriceLevel[]) => void;
   pushTrade: (t: Trade) => void;
+  clearTrades: () => void;
+  setAcceptingTrades: (b: boolean) => void;
 }
 
 const TRADE_BUFFER = 80;
 
-export const useMarketStore = create<MarketState>((set) => ({
+export const useMarketStore = create<MarketState>((set, get) => ({
   symbol: DEFAULT_SYMBOL,
   connected: false,
   bestBid: null,
@@ -49,18 +52,23 @@ export const useMarketStore = create<MarketState>((set) => ({
   asks: [],
   trades: [],
   lastTradeTs: null,
+  acceptingTrades: true,
 
   setSymbol: (symbol) => set({ symbol }),
   setConnected: (connected) => set({ connected }),
   setBestPrices: (bestBid, bestAsk, bidSize, askSize) =>
     set({ bestBid, bestAsk, bidSize, askSize }),
   setLadder: (bids, asks) => set({ bids, asks }),
-  pushTrade: (trade) =>
+  pushTrade: (trade) => {
+    if (!get().acceptingTrades) return;
     set((s) => {
       const next = [trade, ...s.trades];
       if (next.length > TRADE_BUFFER) next.length = TRADE_BUFFER;
       return { trades: next, lastTradeTs: trade.ts_ns };
-    }),
+    });
+  },
+  clearTrades: () => set({ trades: [], lastTradeTs: null }),
+  setAcceptingTrades: (acceptingTrades) => set({ acceptingTrades }),
 }));
 
 // ----- Latency telemetry -----------------------------------------------------
@@ -77,11 +85,14 @@ interface LatencyState {
   windowStart: number; // ms timestamp for throughput measurement
   windowOps: number;
   throughputOps: number; // EWMA ops/sec
+  acceptingPushes: boolean;
 
   recordSubmit: (latency_ns: number, filled: boolean) => void;
   recordBatch: (batch: SubmitSample[]) => void;
   resetThroughputWindow: () => void;
   tickThroughput: () => void;
+  reset: () => void;
+  setAccepting: (b: boolean) => void;
 }
 
 const LATENCY_BUFFER = 200;
@@ -93,8 +104,10 @@ export const useLatencyStore = create<LatencyState>((set, get) => ({
   windowStart: typeof window !== "undefined" ? performance.now() : 0,
   windowOps: 0,
   throughputOps: 0,
+  acceptingPushes: true,
 
-  recordSubmit: (latency_ns, filled) =>
+  recordSubmit: (latency_ns, filled) => {
+    if (!get().acceptingPushes) return;
     set((s) => {
       const samples = [latency_ns, ...s.samples];
       if (samples.length > LATENCY_BUFFER) samples.length = LATENCY_BUFFER;
@@ -104,10 +117,12 @@ export const useLatencyStore = create<LatencyState>((set, get) => ({
         totalFilled: s.totalFilled + (filled ? 1 : 0),
         windowOps: s.windowOps + 1,
       };
-    }),
+    });
+  },
 
   recordBatch: (batch) => {
     if (batch.length === 0) return;
+    if (!get().acceptingPushes) return;
     set((s) => {
       // Newest at the front. Reverse the batch so the most recent sample lands first.
       const incoming: number[] = new Array(batch.length);
@@ -147,6 +162,18 @@ export const useLatencyStore = create<LatencyState>((set, get) => ({
       windowOps: 0,
     });
   },
+
+  reset: () =>
+    set({
+      samples: [],
+      totalSubmitted: 0,
+      totalFilled: 0,
+      windowStart: typeof window !== "undefined" ? performance.now() : 0,
+      windowOps: 0,
+      throughputOps: 0,
+    }),
+
+  setAccepting: (acceptingPushes) => set({ acceptingPushes }),
 }));
 
 // Percentile helper for the latency HUD

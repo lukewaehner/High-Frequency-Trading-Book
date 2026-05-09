@@ -84,7 +84,21 @@ export function Sim() {
   }, [mode]);
 
   const handleRunToggle = () => {
+    const goingToStop = running;
     setRunning(!running);
+    if (goingToStop) {
+      // Drain absorber: clear visible state + ignore further pushes for a beat
+      // so that buffered trades/samples already on the wire don't keep ticking
+      // counters and repopulating the histogram after the user clicks pause.
+      useLatencyStore.getState().reset();
+      useMarketStore.getState().clearTrades();
+      useLatencyStore.getState().setAccepting(false);
+      useMarketStore.getState().setAcceptingTrades(false);
+      window.setTimeout(() => {
+        useLatencyStore.getState().setAccepting(true);
+        useMarketStore.getState().setAcceptingTrades(true);
+      }, 700);
+    }
   };
 
   return (

@@ -287,30 +287,30 @@ function Bento() {
         size="2x2"
         accent
         label="Sustained throughput"
-        value="200k–500k"
+        value="5.9M"
         unit="orders/sec"
-        sub="Mixed workload, single core"
+        sub="Mixed workload, single core, release. 10-second sustained run."
       />
 
       <BentoCell
         size="1x1"
-        label="Order submit"
-        value="113"
-        unit="ns"
-        sub="Non-crossing limit"
+        label="Submit rate"
+        value="16.1M"
+        unit="ops/sec"
+        sub="Non-crossing limits"
       />
       <BentoCell
         size="1x1"
-        label="Best bid lookup"
-        value="3.5"
-        unit="ns"
+        label="Best-price reads"
+        value="700M"
+        unit="ops/sec"
         sub="O(log n) BTreeMap"
       />
       <BentoCell
         size="2x1"
-        label="Match end-to-end"
-        value="1.47"
-        unit="µs"
+        label="Match throughput"
+        value="775k"
+        unit="matches/sec"
         sub="Cross-spread execution, including trade record generation"
       />
 
@@ -329,16 +329,17 @@ function Bento() {
       />
       <BentoCell
         size="1x1"
-        label="Tail latency"
-        value="<2"
-        unit="µs"
-        sub="p99 processing"
+        label="60s sustained"
+        value="2.7M"
+        unit="ops/sec"
+        sub="After a minute of mixed load, book at depth"
       />
       <BentoCell
         size="1x1"
-        label="Cancellation"
-        value="Lazy"
-        sub="Tombstoned, swept on match"
+        label="Cancel rate"
+        value="16.7M"
+        unit="ops/sec"
+        sub="Lazy tombstone, O(1)"
       />
       <BentoCell
         size="1x1"

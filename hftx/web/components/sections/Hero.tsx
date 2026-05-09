@@ -69,10 +69,9 @@ const titleLineParent: Variants = {
 };
 
 const ghostNumber: Variants = {
-  hidden: { opacity: 0, scale: 0.96 },
+  hidden: { opacity: 0 },
   visible: {
     opacity: 0.025,
-    scale: 1,
     transition: { duration: 1.4, ease: EASE_OUT_EXPO, delay: 0.15 },
   },
 };
@@ -89,19 +88,25 @@ export function Hero() {
 
   return (
     <section className="relative isolate overflow-hidden">
-      {/* Editorial number ghost — fades in slowly under the title */}
+      {/* Editorial number ghost — fades in slowly under the title.
+       * Two-layer amber glow only; the previous third layer at 200px blur
+       * radius was pegging the rasterizer on first paint. */}
       <motion.div
         aria-hidden
         variants={reduced ? fadeIn : ghostNumber}
         initial="hidden"
         animate="visible"
         style={{
+          willChange: "opacity",
           textShadow:
-            "0 0 40px oklch(0.88 0.185 82 / 0.7), 0 0 100px oklch(0.88 0.185 82 / 0.55), 0 0 200px oklch(0.88 0.185 82 / 0.4)",
+            "0 0 30px oklch(0.88 0.185 82 / 0.75), 0 0 80px oklch(0.88 0.185 82 / 0.5)",
         }}
-        className="pointer-events-none absolute -top-20 right-[-6vw] select-none font-display text-[34vw] font-extrabold leading-none tracking-tighter text-fg md:text-[24vw]"
+        className="pointer-events-none absolute -top-20 right-2 flex select-none items-baseline font-display text-[34vw] font-extrabold leading-none tracking-tighter text-fg md:right-4 md:text-[24vw]"
       >
-        113
+        <span>62</span>
+        <span className="font-mono text-[0.18em] font-bold uppercase tracking-[0.18em]">
+          ns
+        </span>
       </motion.div>
 
       <motion.div

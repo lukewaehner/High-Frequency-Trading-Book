@@ -3,13 +3,25 @@
 import { useMarketStore } from "@/lib/store";
 import { formatPrice, formatQty } from "@/lib/format";
 import type { Trade } from "@/lib/types";
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 
 const VISIBLE = 30;
+// Decouple tape redraws from trade arrival rate. The store still ingests every
+// print at full speed; the tape just samples it at a human-readable cadence.
+const TAPE_REFRESH_MS = 750;
 
 export function TradeTape() {
-  const trades = useMarketStore((s) => s.trades);
-  const visible = useMemo(() => trades.slice(0, VISIBLE), [trades]);
+  const [visible, setVisible] = useState<Trade[]>([]);
+
+  useEffect(() => {
+    const sample = () => {
+      const trades = useMarketStore.getState().trades;
+      setVisible(trades.slice(0, VISIBLE));
+    };
+    sample();
+    const id = setInterval(sample, TAPE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
 
   // Tape is ALWAYS visible — when empty, render placeholder strip with a hint
   if (visible.length === 0) {
