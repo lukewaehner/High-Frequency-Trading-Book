@@ -5,10 +5,14 @@ import type {
   BatchOrderResult,
   BatchSubmitRequest,
   BatchSubmitResponse,
+  BotConfig,
   DepthStreamMsg,
+  LatencySample,
+  LatencyStreamMsg,
   MarketDepth,
   OrderBookState,
   OrderStreamMsg,
+  SimStatusResponse,
   SubmitOrderRequest,
   SubmitOrderResponse,
   SymbolsResponse,
@@ -251,6 +255,78 @@ export function openOrderStream(
       return ws?.readyState === WebSocket.OPEN;
     },
   };
+}
+
+// ----- Server-side bot driver ------------------------------------------------
+
+export async function startServerSim(
+  config: BotConfig,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${REST_BASE}/sim/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+  }
+}
+
+export async function stopServerSim(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${REST_BASE}/sim/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol }),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+  }
+}
+
+export async function fetchServerSimStatus(
+  signal?: AbortSignal,
+): Promise<SimStatusResponse> {
+  const res = await fetch(`${REST_BASE}/sim/status`, {
+    signal,
+    cache: "no-store",
+  });
+  return jsonOrThrow<SimStatusResponse>(res);
+}
+
+/**
+ * Subscribes to the server-side latency sample stream. Filters out ping/pong
+ * envelopes; the caller only sees `LatencySample` payloads.
+ */
+export function openLatencyStream(
+  _symbol: string,
+  onSample: (sample: LatencySample) => void,
+  opts: {
+    onOpen?: () => void;
+    onClose?: () => void;
+    onError?: (e: Event) => void;
+  } = {},
+): StreamHandle {
+  return openStream<LatencyStreamMsg>(
+    `${WS_BASE}/sim/latency/stream`,
+    (msg) => {
+      if (msg.type === "latency") {
+        onSample({
+          latency_ns: msg.latency_ns,
+          filled: msg.filled,
+          ts_ms: msg.ts_ms,
+        });
+      }
+    },
+    opts,
+  );
 }
 
 function openStream<T>(

@@ -147,10 +147,61 @@ pub enum WebSocketMessage {
     Trade(TradeEvent),
     #[serde(rename = "depth")]
     Depth(DepthUpdate),
+    #[serde(rename = "latency")]
+    Latency(LatencySample),
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "ping")]
     Ping { timestamp: u128 },
     #[serde(rename = "pong")]
     Pong { timestamp: u128 },
-} 
+}
+
+/// Configuration for a server-side bot driver. Mirrors the browser sim controls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotConfig {
+    pub symbol: String,
+    pub makers: u32,
+    pub takers: u32,
+    /// 0-100; higher = tighter maker spread, more taker crossing.
+    pub aggression: u32,
+    pub tick_ms: u64,
+}
+
+/// Request body for `POST /sim/start`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimStartRequest {
+    pub symbol: String,
+    pub makers: u32,
+    pub takers: u32,
+    pub aggression: u32,
+    pub tick_ms: u64,
+}
+
+/// Request body for `POST /sim/stop`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimStopRequest {
+    pub symbol: String,
+}
+
+/// One driver's status entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimStatusEntry {
+    pub symbol: String,
+    pub running: bool,
+    pub config: BotConfig,
+}
+
+/// Aggregate driver status response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimStatusResponse {
+    pub drivers: Vec<SimStatusEntry>,
+}
+
+/// Per-order latency sample broadcast on the latency stream.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct LatencySample {
+    pub latency_ns: u128,
+    pub filled: bool,
+    pub ts_ms: u128,
+}

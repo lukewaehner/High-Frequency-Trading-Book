@@ -21,10 +21,12 @@ use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
+mod bot_driver;
 mod exchange;
 mod websocket;
 mod types;
 
+use bot_driver::BotDriver;
 use exchange::Exchange;
 use types::*;
 
@@ -34,6 +36,8 @@ async fn main() {
 
     let exchange = Arc::new(Exchange::new());
     let (trade_tx, _) = broadcast::channel(1000);
+    let (latency_tx, _) = broadcast::channel::<LatencySample>(4096);
+    let bot_driver = BotDriver::new(exchange.clone(), trade_tx.clone(), latency_tx.clone());
 
     let app = Router::new()
         .route("/health", get(health_check))
@@ -46,10 +50,16 @@ async fn main() {
         .route("/symbols/:symbol/trades/stream", get(trade_stream))
         .route("/symbols/:symbol/depth/stream", get(depth_stream))
         .route("/symbols/:symbol/orders/stream", get(order_stream))
+        .route("/sim/start", post(sim_start))
+        .route("/sim/stop", post(sim_stop))
+        .route("/sim/status", get(sim_status))
+        .route("/sim/latency/stream", get(sim_latency_stream))
         .layer(CorsLayer::permissive())
         .with_state(AppState {
             exchange: exchange.clone(),
             trade_broadcaster: trade_tx,
+            bot_driver,
+            latency_broadcaster: latency_tx,
         });
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
@@ -68,17 +78,25 @@ async fn main() {
     info!("  WS   /symbols/:symbol/trades/stream - Trade stream");
     info!("  WS   /symbols/:symbol/depth/stream - Depth stream");
     info!("  WS   /symbols/:symbol/orders/stream - Order submission stream");
+    info!("  POST /sim/start - Start server-side bot driver");
+    info!("  POST /sim/stop - Stop server-side bot driver");
+    info!("  GET  /sim/status - Bot driver status");
+    info!("  WS   /sim/latency/stream - Per-order latency samples");
 
     axum::serve(listener, app).await.unwrap();
 }
 
 /// Application state shared across all handlers.
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     /// Exchange engine managing order books
-    exchange: Arc<Exchange>,
+    pub exchange: Arc<Exchange>,
     /// Broadcast channel for real-time trade events
-    trade_broadcaster: broadcast::Sender<TradeEvent>,
+    pub trade_broadcaster: broadcast::Sender<TradeEvent>,
+    /// Server-side bot driver registry
+    pub bot_driver: BotDriver,
+    /// Broadcast channel for per-order latency samples produced by the driver
+    pub latency_broadcaster: broadcast::Sender<LatencySample>,
 }
 
 /// Health check endpoint returning service status.
@@ -263,6 +281,51 @@ async fn order_stream(
     State(state): State<AppState>,
 ) -> Response {
     ws.on_upgrade(move |socket| websocket::handle_order_stream(socket, symbol, state))
+}
+
+/// Starts (or replaces) the server-side bot driver for a symbol.
+async fn sim_start(
+    State(state): State<AppState>,
+    Json(req): Json<SimStartRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.exchange.get_best_prices(&req.symbol).await.is_none() {
+        return Err(AppError::SymbolNotFound);
+    }
+    let config = BotConfig {
+        symbol: req.symbol,
+        makers: req.makers,
+        takers: req.takers,
+        aggression: req.aggression,
+        tick_ms: req.tick_ms,
+    };
+    state.bot_driver.start(config).await;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Stops the server-side bot driver for a symbol.
+async fn sim_stop(
+    State(state): State<AppState>,
+    Json(req): Json<SimStopRequest>,
+) -> impl IntoResponse {
+    let stopped = state.bot_driver.stop(&req.symbol).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stopped": stopped, "symbol": req.symbol })),
+    )
+}
+
+/// Returns the status of all running drivers.
+async fn sim_status(State(state): State<AppState>) -> impl IntoResponse {
+    let drivers = state.bot_driver.status().await;
+    Json(SimStatusResponse { drivers })
+}
+
+/// WebSocket handler for the latency sample stream.
+async fn sim_latency_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| websocket::handle_latency_stream(socket, state))
 }
 
 /// Application error types for HTTP responses.
