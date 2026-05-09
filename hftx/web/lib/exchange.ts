@@ -1,6 +1,8 @@
 // REST + WebSocket client for the hftx exchange-service.
 // Default endpoint is localhost:8080. Override with NEXT_PUBLIC_HFTX_URL.
 
+import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
+
 import type {
   BatchOrderResult,
   BatchSubmitRequest,
@@ -201,6 +203,8 @@ export function openOrderStream(
   const connect = () => {
     if (closedByCaller) return;
     ws = new WebSocket(url);
+    // This is the only binary WebSocket on the service; other streams stay JSON.
+    ws.binaryType = "arraybuffer";
 
     ws.addEventListener("open", () => {
       reconnectDelay = 800;
@@ -209,9 +213,13 @@ export function openOrderStream(
 
     ws.addEventListener("message", (ev) => {
       try {
-        const msg = JSON.parse(ev.data as string) as OrderStreamMsg;
+        const msg = msgpackDecode(
+          new Uint8Array(ev.data as ArrayBuffer),
+        ) as OrderStreamMsg;
         if (msg.type === "ping" && ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "pong", timestamp: msg.timestamp }));
+          ws.send(
+            msgpackEncode({ type: "pong", timestamp: msg.timestamp }),
+          );
           return;
         }
         if (msg.type === "result") {
@@ -241,7 +249,7 @@ export function openOrderStream(
     send(orders) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return null;
       const mySeq = ++seq;
-      ws.send(JSON.stringify({ type: "batch", seq: mySeq, orders }));
+      ws.send(msgpackEncode({ type: "batch", seq: mySeq, orders }));
       return mySeq;
     },
     close() {

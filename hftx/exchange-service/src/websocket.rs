@@ -226,6 +226,9 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
 /// send `batch` frames carrying a sequence number; the server replies with a
 /// `result` frame per batch echoing the same `seq`. Trades produced by the
 /// matched orders are broadcast on the trade stream as usual.
+///
+/// This is the ONLY binary (MessagePack) WebSocket on the service. The trade,
+/// depth, and latency streams stay JSON; do not assume binary on those.
 pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppState) {
     info!("New order stream connection for {}", symbol);
 
@@ -236,8 +239,8 @@ pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppSt
         tokio::select! {
             msg = receiver.next() => {
                 match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        let parsed = serde_json::from_str::<OrderStreamMessage>(&text);
+                    Some(Ok(Message::Binary(bytes))) => {
+                        let parsed = rmp_serde::from_slice::<OrderStreamMessage>(&bytes);
                         match parsed {
                             Ok(OrderStreamMessage::Batch(req)) => {
                                 let response = process_batch(&symbol, &state, req).await;
@@ -248,16 +251,16 @@ pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppSt
                                         message,
                                     },
                                 };
-                                if let Ok(json) = serde_json::to_string(&envelope) {
-                                    if sender.send(Message::Text(json)).await.is_err() {
+                                if let Ok(buf) = rmp_serde::to_vec_named(&envelope) {
+                                    if sender.send(Message::Binary(buf)).await.is_err() {
                                         break;
                                     }
                                 }
                             }
                             Ok(OrderStreamMessage::Ping { timestamp }) => {
                                 let pong = OrderStreamMessage::Pong { timestamp };
-                                if let Ok(json) = serde_json::to_string(&pong) {
-                                    let _ = sender.send(Message::Text(json)).await;
+                                if let Ok(buf) = rmp_serde::to_vec_named(&pong) {
+                                    let _ = sender.send(Message::Binary(buf)).await;
                                 }
                             }
                             Ok(_) => {}
@@ -266,13 +269,13 @@ pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppSt
                                     seq: None,
                                     message: format!("invalid frame: {}", e),
                                 };
-                                if let Ok(json) = serde_json::to_string(&envelope) {
-                                    let _ = sender.send(Message::Text(json)).await;
+                                if let Ok(buf) = rmp_serde::to_vec_named(&envelope) {
+                                    let _ = sender.send(Message::Binary(buf)).await;
                                 }
                             }
                         }
                     }
-                    Some(Ok(Message::Binary(_))) => {}
+                    Some(Ok(Message::Text(_))) => {} // wire is binary now; drop text
                     Some(Ok(Message::Ping(data))) => {
                         let _ = sender.send(Message::Pong(data)).await;
                     }
@@ -296,8 +299,8 @@ pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppSt
                         .unwrap()
                         .as_millis(),
                 };
-                if let Ok(json) = serde_json::to_string(&ping) {
-                    if sender.send(Message::Text(json)).await.is_err() {
+                if let Ok(buf) = rmp_serde::to_vec_named(&ping) {
+                    if sender.send(Message::Binary(buf)).await.is_err() {
                         break;
                     }
                 }
