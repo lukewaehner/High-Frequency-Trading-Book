@@ -1,519 +1,216 @@
-# HFT Ledger - High-Frequency Trading Order Book
+# HFTX
 
-A complete high-frequency trading (HFT) system implemented in Rust, featuring a price-time priority matching engine, real-time market data streaming, and comprehensive performance testing. Designed for microsecond-level latency and sustained throughput exceeding 100,000 orders per second.
-
-## Table of Contents
-
-- [Architecture](#-architecture)
-- [Features](#-features)
-- [Performance](#-performance)
-- [Quick Start](#-quick-start)
-- [Project Structure](#-project-structure)
-- [Components](#-components)
-- [Benchmarks](#-benchmarks)
-- [API Documentation](#-api-documentation)
-- [Testing](#-testing)
-- [Development](#-development)
-- [Examples](#-examples)
-- [License](#-license)
-- [Acknowledgments](#-acknowledgments)
-
-## Architecture
-
-The system is built with a modular architecture optimized for high-frequency trading:
+A price-time-priority matching engine in Rust, with a real-time exchange service, a CLI client, and a Next.js front end that drives the engine live in the browser.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    HFT Ledger System                        │
-├─────────────────────────────────────────────────────────────┤
-│  CLI Client          │  WebSocket Client  │  REST Client    │
-│  (Command Line)      │  (Real-time UI)    │  (HTTP API)     │
-├─────────────────────────────────────────────────────────────┤
-│                 Exchange Service (Axum)                     │
-│  ┌─────────────────┬─────────────────┬─────────────────┐   │
-│  │   REST API      │   WebSocket     │   Trade Engine  │   │
-│  │   Endpoints     │   Streaming     │   Coordinator   │   │
-│  └─────────────────┴─────────────────┴─────────────────┘   │
-├─────────────────────────────────────────────────────────────┤
-│                   Core Order Book Engine                    │
-│  ┌─────────────────┬─────────────────┬─────────────────┐   │
-│  │  Price Levels   │  Order Matching │  Trade Records  │   │
-│  │  (BTreeMap)     │  (Price-Time)   │  (Generation)   │   │
-│  └─────────────────┴─────────────────┴─────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  hftx/web        Next.js + React + Zustand + Framer Motion       │
+│                  Live order book, depth ladder, latency lab UI   │
+├──────────────────────────────────────────────────────────────────┤
+│  hftx/cli        clap-driven HTTP client (submit / cancel /      │
+│                  depth / status / health)                        │
+├──────────────────────────────────────────────────────────────────┤
+│  exchange-service  Axum HTTP + WebSocket; multi-symbol Exchange  │
+│                    coordinator; broadcast channels for trades    │
+├──────────────────────────────────────────────────────────────────┤
+│  orderbook       Lock-light core: BTreeMap price levels, FIFO    │
+│                  per-level queues, lazy cancel, partial fills    │
+└──────────────────────────────────────────────────────────────────┘
 ```
-
-### Core Principles
-
-- **Zero-Copy Operations**: Minimal memory allocations during order processing
-- **Lock-Free Design**: Using concurrent data structures where possible
-- **Price-Time Priority**: Industry-standard matching algorithm
-- **Microsecond Latency**: Optimized for ultra-low latency trading
-- **High Throughput**: Sustained performance under heavy load
-
-## Features
-
-### Order Book Engine
-
-- **Price-Time Priority Matching**: Orders matched by best price first, then by time (FIFO)
-- **Partial Fills**: Large orders can execute against multiple counterparties
-- **Efficient Data Structures**: BTreeMap for O(log n) price operations, VecDeque for FIFO queues
-- **Lazy Cancellation**: Orders marked as cancelled but removed during matching for performance
-- **Trade Generation**: Automatic trade record creation with maker/taker identification
-
-### Exchange Service
-
-- **Async REST API**: Built with Axum for high-performance HTTP handling
-- **Real-time WebSocket Streams**: Live trade execution and market depth updates
-- **Multi-Symbol Support**: Concurrent order books for multiple trading instruments
-- **Thread-Safe Operations**: DashMap + RwLock for concurrent access
-- **CORS Support**: Ready for web-based trading interfaces
-
-### Client Interfaces
-
-- **Command Line Interface**: Full-featured CLI for order management
-- **WebSocket Client**: Real-time market data visualization
-- **REST API**: Standard HTTP interface for integration
-
-### Performance Testing
-
-- **Comprehensive Benchmarks**: Latency and throughput measurements
-- **Real-time Profiling**: Nanosecond-precision timing
-- **Stress Testing**: Sustained load testing with mixed workloads
-- **Statistical Analysis**: Multiple iterations for reliable metrics
 
 ## Performance
 
-Based on benchmarks on modern hardware:
+Numbers from the `cargo run --release` lab on an M-series Mac. See [`hftx/src/latency_test.rs`](hftx/src/latency_test.rs) for the harness.
 
-| Metric                   | Performance          | Target            |
-| ------------------------ | -------------------- | ----------------- |
-| **Market Data Access**   | 3-6 ns per call      | < 10 ns           |
-| **Order Submission**     | ~113 ns per order    | < 500 ns          |
-| **Order Matching**       | ~1.47 μs end-to-end  | < 5 μs            |
-| **Sustained Throughput** | 200k-500k orders/sec | > 100k orders/sec |
-| **WebSocket Latency**    | < 100 μs             | < 1 ms            |
-| **Memory Usage**         | Minimal allocations  | Zero-copy design  |
+| Path                     | Latency / throughput           |
+| ------------------------ | ------------------------------ |
+| Best bid / ask lookup    | 3 to 6 ns                      |
+| Order submission         | ~113 ns                        |
+| Cross-spread match       | ~1.47 µs end-to-end            |
+| Sustained throughput     | 200k to 500k orders / sec      |
+| WebSocket fan-out        | < 100 µs                       |
 
-### Performance Characteristics
+## Prerequisites
 
-- **Latency Distribution**: 99th percentile < 2 μs for order processing
-- **Jitter**: < 10% variance under normal load
-- **Scalability**: Linear performance scaling with CPU cores
-- **Memory Efficiency**: Constant memory usage per price level
+- Rust 1.82+ (workspace edition 2021)
+- Node 20+ and `pnpm` (the web app uses pnpm)
+- GNU `make` (any recent macOS / Linux box)
 
-## Quick Start
+## Quick start
 
-### Prerequisites
-
-- Rust 1.82+ (for proc macro support)
-- Cargo (included with Rust)
-
-### Installation
+Everything is wired through the workspace `Makefile` at `hftx/`.
 
 ```bash
-# Clone the repository
-git clone https://github.com/lukewaehner/hft-ledger.git
-cd hft-ledger/hftx
-
-# Build the project
-cargo build --release
+cd hftx
+make dev
 ```
 
-### Running the Performance Lab
+That spawns:
 
-```bash
-# Run comprehensive performance tests and demo
-cargo run --release
+- the exchange service on `http://localhost:8080` (REST + WS)
+- the Next.js web app on `http://localhost:3000`
 
-# Expected output:
-#  HFT Ledger - Real-time Latency Tests
-#  Market Data Latency Test
-#   Best bid lookup: 3.45 ns/call
-#   Best ask lookup: 3.52 ns/call
-# ...
-```
+Ctrl-C tears both down. Browse `localhost:3000` and the front end connects to the engine over the env-default `NEXT_PUBLIC_HFTX_URL=http://localhost:8080`.
 
-### Starting the Exchange Service
-
-```bash
-# Start the exchange service
-cd exchange-service
-RUST_LOG=info cargo run --release
-
-# Service starts on http://localhost:8080
-# WebSocket streams available at ws://localhost:8080/symbols/{symbol}/trades/stream
-```
-
-### Using the CLI Client
-
-```bash
-# Navigate to CLI directory
-cd cli
-
-# Submit a buy order
-cargo run -- submit --symbol AAPL --side bid --price 15000 --quantity 100
-
-# Check market status
-cargo run -- status --symbol AAPL
-
-# View market depth
-cargo run -- depth --symbol AAPL --levels 5
-
-# Cancel an order
-cargo run -- cancel --symbol AAPL --order-id 123456789
-```
-
-### WebSocket Client
-
-Open `websocket_client.html` in a web browser to see real-time market data streaming and submit test orders.
-
-## Project Structure
+`make help` lists the rest:
 
 ```
-hftx/
-├── orderbook/              # Core order book library
-│   ├── src/
-│   │   ├── lib.rs            # Main order book implementation
-│   │   ├── types.rs          # Core data structures (Order, Trade, etc.)
-│   │   └── price_levels.rs   # Price level management
-│   ├── benches/              # Criterion benchmarks
-│   └── Cargo.toml
-│
-├── exchange-service/       # HTTP/WebSocket exchange service
-│   ├── src/
-│   │   ├── main.rs           # REST API server and routing
-│   │   ├── exchange.rs       # Multi-symbol exchange engine
-│   │   ├── websocket.rs      # Real-time streaming handlers
-│   │   └── types.rs          # API request/response types
-│   └── Cargo.toml
-│
-├── cli/                   # Command-line interface
-│   ├── src/
-│   │   └── main.rs           # CLI commands and HTTP client
-│   └── Cargo.toml
-│
-├── src/                   # Performance testing and demo
-│   ├── main.rs               # Main demo application
-│   └── latency_test.rs       # Comprehensive performance tests
-│
-├── websocket_client.html   # Web-based real-time client
-├── test_exchange.sh       # Exchange service test script
-├── performance_analysis.md # Benchmark results and analysis
-├── EXCHANGE_SERVICE.md     # Exchange service documentation
-└── Cargo.toml             # Workspace configuration
+help        Show this help
+dev         Run engine (8080) + web (3000) together; Ctrl-C tears down both
+engine      Run the exchange service alone (port 8080)
+web         Run the Next.js web frontend alone (port 3000)
+cli         Run the CLI client; pass args via ARGS, e.g. make cli ARGS="health"
+bench       Run Criterion benchmarks (orderbook crate)
+perf        Run the latency / throughput lab in release mode
+test        Run all workspace tests
+fmt         cargo fmt --all
+clippy      cargo clippy --workspace --all-targets -D warnings
+clean       Clean Rust target/ directory
+clean-all   Also clean web build cache and node_modules
+```
+
+## Repository layout
+
+```
+HFT-Ledger/
+├── README.md                       (this file)
+└── hftx/
+    ├── Cargo.toml                  workspace manifest
+    ├── Makefile                    workspace runner
+    ├── scripts/dev.sh              parallel engine + web runner
+    │
+    ├── orderbook/                  core matching engine (library crate)
+    │   ├── src/
+    │   │   ├── lib.rs                OrderBook implementation
+    │   │   ├── price_levels.rs       per-side BTreeMap + FIFO queues
+    │   │   ├── stdio_rendering.rs    pretty-print for tests / lab
+    │   │   └── types.rs              Order, Trade, OrderId, Side
+    │   └── benches/orderbook_bench.rs  Criterion suite
+    │
+    ├── exchange-service/           Axum REST + WS server
+    │   ├── src/
+    │   │   ├── main.rs               routes, app state, error mapping
+    │   │   ├── exchange.rs           multi-symbol Exchange coordinator
+    │   │   ├── websocket.rs          trade + depth stream handlers
+    │   │   └── types.rs              wire types
+    │   └── Cargo.toml
+    │
+    ├── cli/                        clap-based HTTP client
+    │   └── src/main.rs               Submit / Cancel / Depth / Status / Symbols / Health
+    │
+    ├── src/                        latency / throughput lab (root crate)
+    │   ├── main.rs                   demo runner
+    │   └── latency_test.rs           micro-benchmarks
+    │
+    └── web/                        Next.js + React + Tailwind v4 front end
+        ├── app/                      App-Router entry
+        ├── components/               Hero, Ladder, OrderEntry, Engine, Sim, TopBar
+        └── lib/                      exchange client, Zustand stores, formatters
 ```
 
 ## Components
 
-### Core Order Book (`orderbook/`)
+### `orderbook` (core)
 
-The heart of the system - a high-performance order matching engine.
+A lock-light price-time-priority matching engine.
 
-**Key Files:**
+- BTreeMap on each side for O(log n) best-price access.
+- VecDeque per price level for FIFO match order at the level.
+- Lazy cancel: cancelled orders linger on the queue and are skipped at match time, avoiding mid-queue removal cost.
+- Partial fills cascade through the queue until the taker is exhausted or the level is empty.
 
-- `lib.rs`: Main OrderBook implementation with price-time priority matching
-- `types.rs`: Core data structures (Order, Trade, OrderId, Side)
-- `price_levels.rs`: Efficient price level management with FIFO queues
+```rust
+use orderbook::{Order, OrderBook, OrderId, Side};
 
-**Features:**
+let mut book = OrderBook::new();
+book.submit_limit(Order { id: OrderId(1), symbol: "AAPL".into(),
+    side: Side::Ask, px_ticks: 15_000, qty: 100, ts_ns: 0 });
+let trades = book.submit_limit(Order { id: OrderId(2), symbol: "AAPL".into(),
+    side: Side::Bid, px_ticks: 15_000, qty: 60, ts_ns: 1 });
+assert_eq!(trades.len(), 1);
+```
 
-- Price-time priority matching
-- Partial fill support
-- Lazy cancellation for performance
-- Zero-copy operations where possible
+### `exchange-service` (HTTP + WS)
 
-### Exchange Service (`exchange-service/`)
+Axum 0.7 server. Multi-symbol `Exchange` holding one `OrderBook` per symbol behind `RwLock`. Trade events are fanned out via a `broadcast::Sender<TradeEvent>`; depth snapshots are polled by the WS depth handler.
 
-A complete trading service with REST API and WebSocket streaming.
+| Method | Path                                  | Notes                                         |
+| ------ | ------------------------------------- | --------------------------------------------- |
+| GET    | `/health`                             | Liveness + version                            |
+| GET    | `/symbols`                            | Active symbols                                |
+| GET    | `/symbols/:symbol/orderbook`          | Best bid / ask + level counts                 |
+| GET    | `/symbols/:symbol/depth?levels=10`    | N-level market depth                          |
+| POST   | `/symbols/:symbol/orders`             | Submit a single order, returns trades         |
+| POST   | `/symbols/:symbol/orders/batch`       | Submit a batch, returns per-order latency_ns  |
+| DELETE | `/symbols/:symbol/orders/:order_id`   | Cancel an order                               |
+| WS     | `/symbols/:symbol/trades/stream`      | Live trade events                             |
+| WS     | `/symbols/:symbol/depth/stream`       | Live depth snapshots                          |
 
-**Key Files:**
+Submit body:
 
-- `main.rs`: Axum-based HTTP server with routing
-- `exchange.rs`: Multi-symbol exchange coordination
-- `websocket.rs`: Real-time trade and depth streaming
-- `types.rs`: API data structures
+```json
+{ "side": "Bid", "price": 15000, "quantity": 100 }
+```
 
-**Endpoints:**
+WS trade event:
 
-- `GET /health` - Service health check
-- `GET /symbols` - List available symbols
-- `POST /symbols/{symbol}/orders` - Submit orders
-- `DELETE /symbols/{symbol}/orders/{id}` - Cancel orders
-- `GET /symbols/{symbol}/depth` - Market depth
-- `WS /symbols/{symbol}/trades/stream` - Live trades
-- `WS /symbols/{symbol}/depth/stream` - Live depth updates
+```json
+{ "type": "trade",
+  "trade": { "maker": 12, "taker": 13, "symbol": "AAPL",
+             "px_ticks": 15000, "qty": 60, "ts_ns": 1700000000000 },
+  "timestamp": 1700000000000 }
+```
 
-### CLI Client (`cli/`)
-
-Full-featured command-line interface for trading operations.
-
-**Commands:**
-
-- `submit` - Place limit orders
-- `status` - Check order book state
-- `depth` - View market depth
-- `cancel` - Cancel existing orders
-- `health` - Check service health
-- `symbols` - List available symbols
-
-### Performance Testing (`src/`)
-
-Comprehensive performance measurement and demonstration.
-
-**Tests:**
-
-- Market data access latency
-- Order submission performance
-- Order matching latency
-- Cancellation strategy comparison
-- Sustained throughput testing
-
-## Benchmarks
-
-### Running Benchmarks
+### `cli` (HTTP client)
 
 ```bash
-# Run Criterion benchmarks
-cd orderbook
-cargo bench
-
-# Run custom latency tests
-cd ..
-cargo run --release
+# from hftx/
+make cli ARGS="health"
+make cli ARGS="symbols"
+make cli ARGS="depth --symbol AAPL --levels 5"
+make cli ARGS="submit --symbol AAPL --side bid --price 15000 --quantity 100"
+make cli ARGS="status --symbol AAPL"
+make cli ARGS="cancel --symbol AAPL --order-id 12345"
 ```
 
-### Benchmark Categories
+The CLI defaults to `http://localhost:8080`. Override with `--server` (e.g. `make cli ARGS="--server http://example:8080 health"`).
 
-1. **Order Submission**: Non-crossing order processing
-2. **Order Matching**: Cross-spread execution latency
-3. **Market Data**: Best bid/ask lookup performance
-4. **Price Levels**: Price level operations
-5. **Cancellation**: Lazy vs eager removal comparison
-6. **High Frequency**: Realistic HFT scenarios
+### `web` (front end)
 
-### Results Analysis
+Next.js 16 + React 19 + Tailwind v4 + Zustand + Framer Motion. The page IS the product: visitors land on a live read-out of the running engine and can drive it via the in-page sim.
 
-See `performance_analysis.md` for detailed benchmark results and analysis.
+- `app/page.tsx` composes the sections: `TopBar`, `Hero`, `Ladder`, `Sim`, `Engine`.
+- `lib/store.ts` holds two Zustand stores: `useMarketStore` (book, trades, connected) and `useLatencyStore` (samples, throughputOps).
+- `lib/exchange.ts` wraps the REST + WS endpoints. `NEXT_PUBLIC_HFTX_URL` overrides the default `http://localhost:8080`.
+- See [`hftx/web/README.md`](hftx/web/README.md) for the front-end-specific notes.
 
-## API Documentation
+### `src/` (latency lab)
 
-### REST API
+The workspace root crate (`hftx`) is the latency / throughput harness. It pegs an in-process `OrderBook`, runs scripted scenarios, and prints percentiles.
 
-#### Submit Order
-
-```http
-POST /symbols/{symbol}/orders
-Content-Type: application/json
-
-{
-  "side": "Bid",
-  "price": 15000,
-  "quantity": 100
-}
-```
-
-#### Get Market Depth
-
-```http
-GET /symbols/{symbol}/depth?levels=5
-```
-
-#### Cancel Order
-
-```http
-DELETE /symbols/{symbol}/orders/{order_id}
-```
-
-### WebSocket API
-
-#### Trade Stream
-
-```javascript
-const ws = new WebSocket("ws://localhost:8080/symbols/AAPL/trades/stream");
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === "trade") {
-    console.log(`Trade: ${data.trade.qty} @ ${data.trade.px_ticks}`);
-  }
-};
-```
-
-#### Depth Stream
-
-```javascript
-const depthWs = new WebSocket("ws://localhost:8080/symbols/AAPL/depth/stream");
-
-depthWs.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === "depth") {
-    console.log(`Bid: ${data.best_bid}, Ask: ${data.best_ask}`);
-  }
-};
+```bash
+make perf
 ```
 
 ## Testing
 
-### Unit Tests
+```bash
+make test                 # cargo test --workspace
+cargo test -p orderbook   # core matching engine unit tests
+```
+
+## Benchmarks
 
 ```bash
-# Run all tests
-cargo test --workspace
-
-# Run specific component tests
-cargo test --package orderbook
-cargo test --package exchange-service
+make bench
+# orderbook/target/criterion/report/index.html for the HTML report
 ```
 
-### Integration Tests
+## Configuration
 
-```bash
-# Test the exchange service
-./test_exchange.sh
-
-# Test CLI functionality
-cd cli
-cargo run -- health
-```
-
-### Performance Tests
-
-```bash
-# Run comprehensive performance suite
-cargo run --release
-
-# Run specific benchmarks
-cd orderbook
-cargo bench
-```
-
-## Development
-
-### Building
-
-```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# Build specific component
-cargo build --package orderbook
-```
-
-### Code Quality
-
-```bash
-# Format code
-cargo fmt
-
-# Run linter
-cargo clippy
-
-# Check for common issues
-cargo audit
-```
-
-### Documentation
-
-```bash
-# Generate documentation
-cargo doc --open
-
-# Generate documentation for all dependencies
-cargo doc --document-private-items --open
-```
-
-## Examples
-
-### Basic Order Book Usage
-
-```rust
-use orderbook::{OrderBook, Order, OrderId, Side};
-
-let mut book = OrderBook::new();
-
-// Submit a sell order
-let ask = Order {
-    id: OrderId(1),
-    symbol: "AAPL".to_string(),
-    side: Side::Ask,
-    px_ticks: 15000,  // $150.00
-    qty: 100,
-    ts_ns: 1_000_000_000,
-};
-
-book.submit_limit(ask);
-
-// Submit a crossing buy order
-let bid = Order {
-    id: OrderId(2),
-    symbol: "AAPL".to_string(),
-    side: Side::Bid,
-    px_ticks: 15000,  // Will match immediately
-    qty: 50,
-    ts_ns: 1_000_000_001,
-};
-
-let trades = book.submit_limit(bid);
-println!("Trades executed: {}", trades.len());
-```
-
-### WebSocket Client Integration
-
-```javascript
-// Connect to trade stream
-const tradeWs = new WebSocket("ws://localhost:8080/symbols/AAPL/trades/stream");
-
-tradeWs.onopen = () => {
-  console.log("Connected to trade stream");
-};
-
-tradeWs.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-
-  switch (data.type) {
-    case "trade":
-      updateTradeLog(data.trade);
-      break;
-    case "ping":
-      // Respond to ping
-      tradeWs.send(
-        JSON.stringify({
-          type: "pong",
-          timestamp: data.timestamp,
-        })
-      );
-      break;
-  }
-};
-```
-
-### CLI Automation
-
-```bash
-#!/bin/bash
-# Automated trading script
-
-# Check service health
-cargo run -- health
-
-# Submit multiple orders
-for i in {1..10}; do
-    price=$((15000 + i))
-    cargo run -- submit --symbol AAPL --side ask --price $price --quantity 100
-done
-
-# Check final state
-cargo run -- status --symbol AAPL
-```
-
----
+- `NEXT_PUBLIC_HFTX_URL` (web) — base URL for REST + WS. Default `http://localhost:8080`.
+- `RUST_LOG` (engine) — tracing filter. Try `RUST_LOG=info make engine` for the verbose path.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
+MIT. See `LICENSE`.

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLatencyStore } from "@/lib/store";
 import { formatNs } from "@/lib/format";
 import { SectionLabel } from "@/components/ui/primitives";
-import { Reveal, RevealStagger } from "@/components/ui/Reveal";
+import { Reveal } from "@/components/ui/Reveal";
 
 export function Engine() {
   return (
@@ -38,9 +38,7 @@ export function Engine() {
           </Reveal>
         </header>
 
-        <Reveal direction="up" amount={0.15}>
-          <RoundTripHistogram />
-        </Reveal>
+        <RoundTripHistogram />
 
         <Bento />
       </div>
@@ -88,6 +86,7 @@ const EMPTY_SNAPSHOT: ChartSnapshot = {
 function RoundTripHistogram() {
   const totalSubmitted = useLatencyStore((s) => s.totalSubmitted);
   const [snapshot, setSnapshot] = useState<ChartSnapshot>(EMPTY_SNAPSHOT);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const ceilingRef = useRef<number>(MIN_CEILING_NS);
 
   // Periodic snapshot — decouples render rate from sample arrival rate.
@@ -140,36 +139,14 @@ function RoundTripHistogram() {
     return () => clearInterval(t);
   }, []);
 
-  // Dev-only: log periodic stats so we can verify scaling against real data.
-  // Open devtools console to copy/share the output.
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    const t = setInterval(() => {
-      const samples = useLatencyStore.getState().samples;
-      if (samples.length === 0) return;
-      const sorted = samples.slice().sort((a, b) => a - b);
-      const p = (q: number) =>
-        sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
-      // eslint-disable-next-line no-console
-      console.log("[hftx-latency]", {
-        n: samples.length,
-        min_ns: sorted[0],
-        max_ns: sorted[sorted.length - 1],
-        p50_ns: p(0.5),
-        p90_ns: p(0.9),
-        p95_ns: p(0.95),
-        p99_ns: p(0.99),
-        ceiling_ns: Math.round(ceilingRef.current),
-      });
-    }, 3000);
-    return () => clearInterval(t);
-  }, []);
-
   const { bars, ceiling, latest, windowMax, clipped, p50, p99 } = snapshot;
   const hasData = bars.length > 0;
+  const hoveredValue =
+    hoveredIdx != null && hoveredIdx < bars.length ? bars[hoveredIdx] : null;
+  const hoveredAboveScale = hoveredValue != null && hoveredValue > ceiling;
 
   return (
-    <div className="mb-20 rounded-3xl border border-line bg-bg-elevated/40 p-6 md:p-10">
+    <div className="mb-20 border-t border-line-soft pt-10 md:pt-14">
       <div className="mb-6 flex flex-wrap items-baseline justify-between gap-4">
         <div className="flex items-baseline gap-3">
           <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
@@ -185,13 +162,21 @@ function RoundTripHistogram() {
           )}
         </div>
         <div className="flex items-baseline gap-6 font-mono text-xs">
-          <Stat label="p50" value={p50} tone="default" />
-          <Stat label="p99" value={p99} tone="amber" />
+          <InlineStat label="p50" value={p50} tone="default" />
+          <InlineStat label="p99" value={p99} tone="amber" />
         </div>
       </div>
 
-      <div className="relative flex h-44 items-end gap-px md:gap-[2px]">
-        {/* Ceiling reference line + label */}
+      <div
+        className="relative flex h-44 items-end gap-px md:gap-[2px]"
+        role="img"
+        aria-label={
+          hasData && p50 != null && p99 != null
+            ? `Engine latency histogram. p50 ${formatNs(p50)}, p99 ${formatNs(p99)}, peak ${formatNs(windowMax)}.`
+            : "Engine latency histogram, no samples yet."
+        }
+        onPointerLeave={() => setHoveredIdx(null)}
+      >
         {hasData && (
           <>
             <div
@@ -199,8 +184,22 @@ function RoundTripHistogram() {
               className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-fg-dim/30"
             />
             <span className="absolute right-0 top-[-1.3rem] flex items-baseline gap-1.5 font-mono text-[10px] tabular-nums text-fg-dim">
-              <span className="uppercase tracking-[0.18em]">scale</span>
-              <span className="text-amber">{formatNs(ceiling)}</span>
+              {hoveredValue != null ? (
+                <>
+                  <span className="uppercase tracking-[0.18em]">@</span>
+                  <span className="text-fg">{formatNs(hoveredValue)}</span>
+                  {hoveredAboveScale && (
+                    <span className="uppercase tracking-[0.18em] text-ask">
+                      above
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="uppercase tracking-[0.18em]">scale</span>
+                  <span className="text-amber">{formatNs(ceiling)}</span>
+                </>
+              )}
             </span>
           </>
         )}
@@ -212,7 +211,8 @@ function RoundTripHistogram() {
           return (
             <motion.div
               key={i}
-              className={`flex-1 rounded-[1px] ${
+              onPointerEnter={() => setHoveredIdx(i)}
+              className={`flex-1 cursor-crosshair rounded-[1px] ${
                 isClipped ? "bg-ask" : "bg-amber/85"
               }`}
               initial={false}
@@ -224,8 +224,9 @@ function RoundTripHistogram() {
       </div>
 
       <div className="mt-3 flex items-baseline justify-between font-mono text-[10px] tabular-nums text-fg-dim">
-        <span className="uppercase tracking-[0.18em]">
-          ← {bars.length} samples
+        <span className="flex items-baseline gap-1.5">
+          <span className="uppercase tracking-[0.18em]">oldest</span>
+          <span className="text-fg-dim">{bars.length} samples</span>
         </span>
         <span className="flex items-baseline gap-3">
           <span className="flex items-baseline gap-1.5">
@@ -252,9 +253,9 @@ function RoundTripHistogram() {
   );
 }
 
-// Mono numeric stats. Renders the label uppercase but leaves the value alone
-// so the unit (e.g. "µs") doesn't get mangled by text-transform.
-function Stat({
+// Renders the label uppercase but leaves the value alone so the unit (e.g.
+// "µs") doesn't get mangled by text-transform.
+function InlineStat({
   label,
   value,
   tone,
@@ -277,12 +278,11 @@ function Stat({
 
 function Bento() {
   return (
-    <RevealStagger
-      className="grid grid-cols-2 gap-4 md:grid-cols-6 md:gap-5"
-      stagger={0.05}
+    <Reveal
+      direction="up"
       amount={0.15}
+      className="grid grid-cols-2 gap-4 md:grid-cols-6 md:gap-5"
     >
-      {/* Hero stat: throughput */}
       <BentoCell
         size="2x2"
         accent
@@ -317,7 +317,7 @@ function Bento() {
       <BentoCell
         size="1x2"
         label="Architecture"
-        value="Lock-free"
+        value="Sharded"
         sub="DashMap + RwLock per book; broadcast channels; tokio::select! per stream."
       />
 
@@ -346,7 +346,7 @@ function Bento() {
         value="Rust"
         sub="Axum + tokio"
       />
-    </RevealStagger>
+    </Reveal>
   );
 }
 
@@ -374,14 +374,6 @@ function BentoCell({
 
   return (
     <motion.div
-      variants={{
-        hidden: { opacity: 0, y: 18 },
-        visible: {
-          opacity: 1,
-          y: 0,
-          transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
-        },
-      }}
       whileHover={{ y: -2 }}
       transition={{ type: "spring", stiffness: 340, damping: 28 }}
       className={`group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-bg-elevated/40 p-5 md:p-6 ${sizeClass} ${
@@ -389,34 +381,29 @@ function BentoCell({
       }`}
       style={
         accent
-          ? {
-              boxShadow:
-                "inset 0 1px 0 oklch(1 0 0 / 0.04), 0 24px 60px -30px oklch(0.78 0.16 78 / 0.25)",
-            }
+          ? { boxShadow: "inset 0 1px 0 oklch(1 0 0 / 0.04)" }
           : undefined
       }
     >
-      {accent && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -inset-px rounded-2xl"
-          style={{
-            background:
-              "radial-gradient(ellipse at top, oklch(0.78 0.16 78 / 0.08), transparent 60%)",
-          }}
-        />
-      )}
       <span className="relative font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
         {label}
       </span>
-      <div className="relative flex items-baseline gap-2">
+      <div
+        className={`relative flex ${
+          size === "2x2"
+            ? "flex-col items-start gap-2"
+            : "items-baseline gap-2"
+        }`}
+      >
         <span
           className={`font-mono tabular-nums tracking-tight ${
             size === "2x2"
               ? "text-6xl md:text-7xl"
-              : size === "2x1" || size === "1x2"
+              : size === "2x1"
                 ? "text-4xl md:text-5xl"
-                : "text-3xl md:text-4xl"
+                : size === "1x2"
+                  ? "text-2xl md:text-3xl"
+                  : "text-3xl md:text-4xl"
           } ${accent ? "text-amber" : "text-fg"}`}
         >
           {value}

@@ -28,6 +28,11 @@
     0 8px 24px -8px oklch(0.1 0 0 / 0.5);
   --shadow-amber-inner: inset 0 1px 0 oklch(1 0 0 / 0.08),
     inset 0 -1px 0 oklch(0 0 0 / 0.4);
+  --shadow-cta-running: inset 0 1px 0 oklch(1 0 0 / 0.2),
+    inset 0 -1px 0 oklch(0 0 0 / 0.4);
+  --shadow-cta-amber: inset 0 1px 0 oklch(1 0 0 / 0.18),
+    inset 0 -1px 0 oklch(0 0 0 / 0.35),
+    0 12px 36px -12px oklch(0.78 0.16 78 / 0.6);
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
@@ -117,6 +122,14 @@ body {
     var(--color-line) 90%,
     transparent
   );
+}
+
+.shadow-cta-running {
+  box-shadow: var(--shadow-cta-running);
+}
+
+.shadow-cta-amber {
+  box-shadow: var(--shadow-cta-amber);
 }
 
 @keyframes pulse-dot {

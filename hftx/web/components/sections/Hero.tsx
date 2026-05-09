@@ -2,18 +2,19 @@
 
 import {
   motion,
-  useMotionValue,
   useReducedMotion,
-  useSpring,
   type Variants,
 } from "framer-motion";
 import { ArrowDown, GithubLogo, Lightning } from "@phosphor-icons/react";
-import { useEffect } from "react";
 import { useLatencyStore, useMarketStore } from "@/lib/store";
 import { formatNs, formatPrice, formatThroughput } from "@/lib/format";
+import { useFlashOnChange } from "@/lib/useFlashOnChange";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
-import { SectionLabel } from "@/components/ui/primitives";
-import { Magnetic } from "@/components/ui/Magnetic";
+import {
+  MagneticButton,
+  Pulse,
+  SectionLabel,
+} from "@/components/ui/primitives";
 
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
@@ -80,25 +81,11 @@ export function Hero() {
   const reduced = useReducedMotion();
   const bestBid = useMarketStore((s) => s.bestBid);
   const bestAsk = useMarketStore((s) => s.bestAsk);
-  const trades = useMarketStore((s) => s.trades);
   const samples = useLatencyStore((s) => s.samples);
   const throughput = useLatencyStore((s) => s.throughputOps);
 
   const lastLatency = samples[0] ?? 0;
-  const lastTrade = trades[0];
-  const spread =
-    bestBid != null && bestAsk != null ? bestAsk - bestBid : null;
-
-  // Subtle bobbing scroll cue (after the load choreography settles)
-  const cueY = useMotionValue(0);
-  const cueSmoothed = useSpring(cueY, { stiffness: 80, damping: 18 });
-  useEffect(() => {
-    if (reduced) return;
-    const interval = setInterval(() => {
-      cueY.set(cueY.get() === 0 ? 6 : 0);
-    }, 1200);
-    return () => clearInterval(interval);
-  }, [cueY, reduced]);
+  const hasFeed = bestBid != null || bestAsk != null;
 
   return (
     <section className="relative isolate overflow-hidden">
@@ -108,6 +95,10 @@ export function Hero() {
         variants={reduced ? fadeIn : ghostNumber}
         initial="hidden"
         animate="visible"
+        style={{
+          textShadow:
+            "0 0 40px oklch(0.88 0.185 82 / 0.7), 0 0 100px oklch(0.88 0.185 82 / 0.55), 0 0 200px oklch(0.88 0.185 82 / 0.4)",
+        }}
         className="pointer-events-none absolute -top-20 right-[-6vw] select-none font-display text-[34vw] font-extrabold leading-none tracking-tighter text-fg md:text-[24vw]"
       >
         113
@@ -121,10 +112,16 @@ export function Hero() {
       >
         <div className="col-span-1 flex flex-col justify-between md:col-span-7">
           <motion.div variants={slideInLeft}>
-            <SectionLabel
-              index="00 / Engine"
-              title="An order book in Rust"
-            />
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+              <SectionLabel
+                index="00 / Engine"
+                title="An order book in Rust"
+              />
+              <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
+                <Pulse on={hasFeed} />
+                {!hasFeed && <span>engine idle</span>}
+              </span>
+            </div>
           </motion.div>
 
           <div className="flex flex-col gap-8">
@@ -148,51 +145,35 @@ export function Hero() {
 
             <motion.p
               variants={fadeIn}
-              className="max-w-[58ch] text-[15px] leading-relaxed text-fg-muted md:text-base"
+              className="text-[15px] leading-relaxed text-fg-muted md:text-base"
             >
-              HFTX is a lock-free, price-time-priority matching engine written
-              in Rust.{" "}
-              <span className="text-fg">113 ns per order.</span>{" "}
-              <span className="text-fg">~1.5 µs end-to-end.</span>{" "}
-              <span className="text-fg">200k orders/sec, sustained.</span>{" "}
-              Below: the engine running, with you at the controls.
+              A lock-free, price-time-priority matching engine, written in Rust.
             </motion.p>
 
             <motion.div
               variants={liftIn}
               className="flex flex-wrap items-center gap-3"
             >
-              <Magnetic radius={6}>
-                <a
-                  href="#sim"
-                  className="group inline-flex h-11 items-center gap-2.5 rounded-full bg-amber px-5 font-mono text-xs uppercase tracking-[0.18em] text-bg transition-colors hover:bg-amber-glow active:scale-[0.97]"
-                  style={{
-                    boxShadow:
-                      "inset 0 1px 0 oklch(1 0 0 / 0.18), inset 0 -1px 0 oklch(0 0 0 / 0.35), 0 8px 28px -10px oklch(0.78 0.16 78 / 0.55)",
-                  }}
-                >
-                  <Lightning weight="fill" size={14} />
-                  Run the sim
-                </a>
-              </Magnetic>
-              <Magnetic radius={5}>
-                <a
-                  href="https://github.com/lukewaehner/hft-ledger"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-11 items-center gap-2.5 rounded-full border border-line px-5 font-mono text-xs uppercase tracking-[0.18em] text-fg-muted transition-colors hover:border-fg-muted hover:text-fg"
-                >
-                  <GithubLogo weight="regular" size={14} />
-                  Read the source
-                </a>
-              </Magnetic>
+              <MagneticButton variant="primary" size="lg" href="#sim">
+                <Lightning weight="fill" size={14} />
+                Run the sim
+              </MagneticButton>
+              <MagneticButton
+                variant="outline"
+                size="lg"
+                href="https://github.com/lukewaehner/hft-ledger"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <GithubLogo weight="regular" size={14} />
+                Read the source
+              </MagneticButton>
             </motion.div>
           </div>
 
           <motion.div
             variants={fadeIn}
-            style={{ y: cueSmoothed }}
-            className="hidden items-center gap-3 font-mono text-[11px] uppercase tracking-[0.22em] text-fg-dim md:flex"
+            className="mt-12 hidden items-center gap-3 font-mono text-[11px] uppercase tracking-[0.22em] text-fg-dim md:flex"
           >
             <ArrowDown size={14} />
             Scroll to watch it work
@@ -204,7 +185,7 @@ export function Hero() {
           variants={{
             hidden: {},
             visible: {
-              transition: { staggerChildren: 0.07, delayChildren: 0.45 },
+              transition: { staggerChildren: 0.07, delayChildren: 0.2 },
             },
           }}
           className="col-span-1 flex flex-col justify-end gap-2 md:col-span-5 md:justify-center"
@@ -214,24 +195,14 @@ export function Hero() {
             value={bestBid != null ? formatPrice(bestBid) : "—"}
             unit="USD"
             tone="bid"
+            flashKey={bestBid ?? undefined}
           />
           <ScopeRow
             label="Best ask"
             value={bestAsk != null ? formatPrice(bestAsk) : "—"}
             unit="USD"
             tone="ask"
-          />
-          <ScopeRow
-            label="Spread"
-            value={spread != null ? `${spread}` : "—"}
-            unit="ticks"
-            tone="default"
-          />
-          <ScopeRow
-            label="Last trade"
-            value={lastTrade ? formatPrice(lastTrade.px_ticks) : "—"}
-            unit={lastTrade ? `${lastTrade.qty}@` : ""}
-            tone="amber"
+            flashKey={bestAsk ?? undefined}
           />
           <ScopeRow
             label="Round-trip"
@@ -271,25 +242,34 @@ const scopeRowVariants: Variants = {
   },
 };
 
+const TONE_CLASS = {
+  default: "text-fg",
+  amber: "text-amber",
+  bid: "text-bid",
+  ask: "text-ask",
+} as const;
+
+const TONE_GLOW = {
+  default: "oklch(0.965 0.005 80 / 0.55)",
+  amber: "oklch(0.88 0.185 82 / 0.7)",
+  bid: "oklch(0.78 0.14 165 / 0.7)",
+  ask: "oklch(0.7 0.16 25 / 0.7)",
+} as const;
+
 function ScopeRow({
   label,
   value,
   unit,
   tone,
+  flashKey,
 }: {
   label: string;
   value: React.ReactNode;
   unit?: string;
-  tone: "default" | "amber" | "bid" | "ask";
+  tone: keyof typeof TONE_CLASS;
+  flashKey?: string | number;
 }) {
-  const toneClass =
-    tone === "amber"
-      ? "text-amber"
-      : tone === "bid"
-        ? "text-bid"
-        : tone === "ask"
-          ? "text-ask"
-          : "text-fg";
+  const valueControls = useFlashOnChange(flashKey, TONE_GLOW[tone]);
 
   return (
     <motion.div
@@ -300,11 +280,12 @@ function ScopeRow({
         {label}
       </span>
       <span className="flex items-baseline gap-2">
-        <span
-          className={`font-mono text-3xl tracking-tight md:text-4xl ${toneClass}`}
+        <motion.span
+          animate={valueControls}
+          className={`font-mono text-3xl tracking-tight md:text-4xl ${TONE_CLASS[tone]}`}
         >
           {value}
-        </span>
+        </motion.span>
         {unit && (
           <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-fg-dim">
             {unit}

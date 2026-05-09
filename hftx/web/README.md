@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# hftx/web
 
-## Getting Started
+The HFTX front end. Next.js 16 + React 19 + Tailwind v4 + Zustand + Framer Motion. The page renders a live read-out of the Rust matching engine running on `localhost:8080` and lets the visitor drive it via an in-page sim.
 
-First, run the development server:
+For the full project (engine, CLI, benchmarks), see the [repo-root README](../../README.md).
+
+## Run it
+
+From the workspace root, the easiest path is:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd ..                # to hftx/
+make dev             # spawns engine + web in parallel
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+To run only the front end:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm install         # one-time
+pnpm dev             # http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The front end expects the exchange service at `http://localhost:8080`. Override with:
 
-## Learn More
+```bash
+NEXT_PUBLIC_HFTX_URL=http://example:8080 pnpm dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Layout
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+app/                  App Router entry; page.tsx composes the sections
+components/
+├── sections/         Hero, Ladder, OrderEntry, Sim, Engine, TopBar, Footer, TradeTape
+└── ui/               primitives.tsx (MagneticButton, SectionLabel, Pulse, ...),
+                     AnimatedNumber, Magnetic, Reveal
+lib/
+├── store.ts          Zustand: useMarketStore, useLatencyStore
+├── exchange.ts       fetch / WebSocket wrappers
+├── format.ts         number / price / latency formatters
+├── useFlashOnChange.ts  phosphor flash hook for live updates
+├── cn.ts             tailwind-merge helper
+└── types.ts          shared wire types
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`AGENTS.md` and `CLAUDE.md` document project conventions for AI tooling. `PRODUCT.md` and `DESIGN.md` are the brand / design source of truth (consumed by the `impeccable` skill).
 
-## Deploy on Vercel
+## Scripts
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+pnpm dev      # next dev
+pnpm build    # next build
+pnpm start    # next start (after build)
+pnpm lint     # eslint
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+
+- This Next.js install has breaking changes from training-data versions. See `AGENTS.md`: read `node_modules/next/dist/docs/` before touching framework-level APIs.
+- Tailwind tokens live in `app/globals.css` under the `@theme` block. Editing color or motion tokens? Update `DESIGN.md` to keep the doc honest.
+- All numerics use the mono font with tabular-nums. Don't break that.

@@ -6,7 +6,7 @@
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -36,7 +36,6 @@ async fn main() {
     let (trade_tx, _) = broadcast::channel(1000);
 
     let app = Router::new()
-        .route("/", get(serve_frontend))
         .route("/health", get(health_check))
         .route("/symbols", get(list_symbols))
         .route("/symbols/:symbol/orderbook", get(get_orderbook))
@@ -56,10 +55,8 @@ async fn main() {
         .await
         .unwrap();
 
-    info!(" HFT Exchange Service starting on http://0.0.0.0:8080");
-    info!(" Web Interface: http://localhost:8080");
-    info!(" Available endpoints:");
-    info!("  GET  / - Web trading interface");
+    info!("HFT Exchange Service starting on http://0.0.0.0:8080");
+    info!("Available endpoints:");
     info!("  GET  /health - Health check");
     info!("  GET  /symbols - List available symbols");
     info!("  GET  /symbols/:symbol/orderbook - Get order book state");
@@ -80,11 +77,6 @@ struct AppState {
     exchange: Arc<Exchange>,
     /// Broadcast channel for real-time trade events
     trade_broadcaster: broadcast::Sender<TradeEvent>,
-}
-
-/// Serves the web trading interface.
-async fn serve_frontend() -> impl IntoResponse {
-    Html(include_str!("../static/index.html"))
 }
 
 /// Health check endpoint returning service status.

@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/cn";
 import type { ReactNode } from "react";
+import { Magnetic } from "./Magnetic";
 
 export function Pulse({
   on,
@@ -101,40 +102,83 @@ export function SectionLabel({
   );
 }
 
+// Amber CTA primitive with built-in magnetic pull. Renders as <a> when href is
+// set, <button> otherwise. `lg` gets the hero proportions and outer glow; `md`
+// is the in-section default. `magnetic={false}` opts out of the cursor pull.
 export function MagneticButton({
   children,
   onClick,
   variant = "primary",
+  size = "md",
   className,
   type = "button",
   disabled,
+  href,
+  target,
+  rel,
+  magnetic = true,
+  magneticRadius,
 }: {
   children: ReactNode;
   onClick?: () => void;
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "outline" | "ghost";
+  size?: "md" | "lg";
   className?: string;
   type?: "button" | "submit";
   disabled?: boolean;
+  href?: string;
+  target?: string;
+  rel?: string;
+  magnetic?: boolean;
+  magneticRadius?: number;
 }) {
   const variants = {
-    primary:
-      "bg-amber text-bg hover:bg-amber-glow shadow-[var(--shadow-amber-inner)]",
-    secondary:
-      "bg-bg-elevated text-fg border border-line hover:border-fg-muted",
+    primary: "bg-amber text-bg hover:bg-amber-glow",
+    outline:
+      "border border-line text-fg-muted hover:border-fg-muted hover:text-fg",
     ghost: "text-fg-muted hover:text-fg",
   };
-  return (
+
+  const sizes = {
+    md: "h-10 gap-2 px-5",
+    lg: "h-11 gap-2.5 px-5",
+  };
+
+  const shadow =
+    variant === "primary"
+      ? size === "lg"
+        ? "shadow-[inset_0_1px_0_oklch(1_0_0_/_0.18),inset_0_-1px_0_oklch(0_0_0_/_0.35),0_8px_28px_-10px_oklch(0.78_0.16_78_/_0.55)]"
+        : "shadow-[var(--shadow-amber-inner)]"
+      : "";
+
+  const classes = cn(
+    "group relative inline-flex items-center rounded-full font-mono text-xs uppercase tracking-[0.18em] transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50",
+    sizes[size],
+    variants[variant],
+    shadow,
+    className,
+  );
+
+  const inner = href ? (
+    <a href={href} target={target} rel={rel} className={classes}>
+      {children}
+    </a>
+  ) : (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={cn(
-        "group relative inline-flex h-10 items-center gap-2 rounded-full px-5 font-mono text-xs uppercase tracking-[0.18em] transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50",
-        variants[variant],
-        className,
-      )}
+      className={classes}
     >
       {children}
     </button>
+  );
+
+  if (!magnetic) return inner;
+
+  return (
+    <Magnetic radius={magneticRadius ?? (size === "lg" ? 6 : 5)}>
+      {inner}
+    </Magnetic>
   );
 }
