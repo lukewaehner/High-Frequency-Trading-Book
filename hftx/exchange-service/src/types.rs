@@ -35,7 +35,7 @@ pub struct BatchOrderResult {
     pub filled: bool,
     pub trade_count: usize,
     /// Engine-side processing time for this order in nanoseconds.
-    pub latency_ns: u128,
+    pub latency_ns: u64,
 }
 
 /// Aggregate batch response. `engine_ns` is wall time inside the handler
@@ -43,7 +43,7 @@ pub struct BatchOrderResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BatchSubmitResponse {
     pub results: Vec<BatchOrderResult>,
-    pub engine_ns: u128,
+    pub engine_ns: u64,
 }
 
 /// Inbound frame on the order WS: a batch plus a client-assigned `seq` so the
@@ -59,7 +59,7 @@ pub struct OrderStreamRequest {
 pub struct OrderStreamResponse {
     pub seq: u64,
     pub results: Vec<BatchOrderResult>,
-    pub engine_ns: u128,
+    pub engine_ns: u64,
 }
 
 /// Tagged message envelope for the order stream. Inbound clients send either
@@ -75,9 +75,9 @@ pub enum OrderStreamMessage {
     #[serde(rename = "error")]
     Error { seq: Option<u64>, message: String },
     #[serde(rename = "ping")]
-    Ping { timestamp: u128 },
+    Ping { timestamp: u64 },
     #[serde(rename = "pong")]
-    Pong { timestamp: u128 },
+    Pong { timestamp: u64 },
 }
 
 /// Query parameters for market depth requests.
@@ -100,7 +100,7 @@ pub struct OrderBookState {
     pub best_ask: Option<i64>,
     pub bid_levels: usize,
     pub ask_levels: usize,
-    pub last_update: u128,
+    pub last_update: u64,
 }
 
 /// Aggregated orders at a specific price level.
@@ -117,7 +117,7 @@ pub struct MarketDepth {
     pub symbol: String,
     pub bids: Vec<PriceLevel>, // Highest to lowest price
     pub asks: Vec<PriceLevel>, // Lowest to highest price
-    pub timestamp: u128,
+    pub timestamp: u64,
 }
 
 /// Trade execution event for WebSocket streaming.
@@ -125,7 +125,7 @@ pub struct MarketDepth {
 pub struct TradeEvent {
     pub symbol: String,
     pub trade: Trade,
-    pub timestamp: u128,
+    pub timestamp: u64,
 }
 
 /// Market depth update for WebSocket streaming.
@@ -136,7 +136,7 @@ pub struct DepthUpdate {
     pub best_ask: Option<i64>,
     pub bid_size: i64,
     pub ask_size: i64,
-    pub timestamp: u128,
+    pub timestamp: u64,
 }
 
 /// WebSocket message types.
@@ -152,9 +152,9 @@ pub enum WebSocketMessage {
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "ping")]
-    Ping { timestamp: u128 },
+    Ping { timestamp: u64 },
     #[serde(rename = "pong")]
-    Pong { timestamp: u128 },
+    Pong { timestamp: u64 },
 }
 
 /// Configuration for a server-side bot driver. Mirrors the browser sim controls.
@@ -201,7 +201,7 @@ pub struct SimStatusResponse {
 /// Per-order latency sample broadcast on the latency stream.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LatencySample {
-    pub latency_ns: u128,
+    pub latency_ns: u64,
     pub filled: bool,
-    pub ts_ms: u128,
+    pub ts_ms: u64,
 }

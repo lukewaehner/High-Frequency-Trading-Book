@@ -105,7 +105,7 @@ async fn health_check() -> impl IntoResponse {
         "status": "healthy",
         "service": "hft-exchange",
         "version": "0.1.0",
-        "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
+        "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
     }))
 }
 
@@ -163,7 +163,7 @@ async fn submit_order(
         let trade_event = TradeEvent {
             symbol: symbol.clone(),
             trade: trade.clone(),
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
         };
         let _ = state.trade_broadcaster.send(trade_event);
     }
@@ -209,7 +209,7 @@ async fn submit_order_batch(
         .submit_order_batch(&symbol, orders)
         .await
         .ok_or(AppError::SymbolNotFound)?;
-    let engine_ns = batch_t0.elapsed().as_nanos();
+    let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
     let mut results = Vec::with_capacity(per_order.len());
     for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
@@ -220,7 +220,7 @@ async fn submit_order_batch(
             let _ = state.trade_broadcaster.send(TradeEvent {
                 symbol: symbol.clone(),
                 trade,
-                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
             });
         }
 
@@ -228,7 +228,7 @@ async fn submit_order_batch(
             order_id: order_ids[idx],
             filled,
             trade_count,
-            latency_ns,
+            latency_ns: latency_ns as u64,
         });
     }
 

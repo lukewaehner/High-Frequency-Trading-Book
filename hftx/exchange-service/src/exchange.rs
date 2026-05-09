@@ -92,7 +92,7 @@ impl Exchange {
             best_ask: orderbook.best_ask(),  // Lowest ask price
             bid_levels,
             ask_levels,
-            last_update: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+            last_update: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64,
         })
     }
 
@@ -149,7 +149,7 @@ impl Exchange {
             symbol: symbol.to_string(),
             bids,
             asks,
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64,
         })
     }
 

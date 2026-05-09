@@ -187,7 +187,7 @@ async fn run_driver(
 
                 let now_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_millis())
+                    .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
 
                 for (trades, latency_ns) in per_order {
@@ -200,7 +200,7 @@ async fn run_driver(
                         });
                     }
                     let _ = latency_tx.send(LatencySample {
-                        latency_ns,
+                        latency_ns: latency_ns as u64,
                         filled,
                         ts_ms: now_ms,
                     });

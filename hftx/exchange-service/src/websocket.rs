@@ -83,7 +83,7 @@ pub async fn handle_trade_stream(socket: WebSocket, symbol: String, state: AppSt
                     timestamp: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
-                        .as_millis()
+                        .as_millis() as u64
                 };
                 if let Ok(ping_json) = serde_json::to_string(&ping) {
                     if sender.send(Message::Text(ping_json)).await.is_err() {
@@ -119,7 +119,7 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_millis(),
+                .as_millis() as u64,
         };
         
         let ws_msg = WebSocketMessage::Depth(depth_update);
@@ -185,7 +185,7 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
                             timestamp: SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap()
-                                .as_millis(),
+                                .as_millis() as u64,
                         };
                         
                         let ws_msg = WebSocketMessage::Depth(depth_update);
@@ -208,7 +208,7 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
                     timestamp: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
-                        .as_millis()
+                        .as_millis() as u64
                 };
                 if let Ok(ping_json) = serde_json::to_string(&ping) {
                     if sender.send(Message::Text(ping_json)).await.is_err() {
@@ -297,7 +297,7 @@ pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppSt
                     timestamp: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
-                        .as_millis(),
+                        .as_millis() as u64,
                 };
                 if let Ok(buf) = rmp_serde::to_vec_named(&ping) {
                     if sender.send(Message::Binary(buf)).await.is_err() {
@@ -342,7 +342,7 @@ async fn process_batch(
         .submit_order_batch(symbol, orders)
         .await
         .ok_or((req.seq, "symbol not found".to_string()))?;
-    let engine_ns = batch_t0.elapsed().as_nanos();
+    let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
     let mut results = Vec::with_capacity(per_order.len());
     for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
@@ -356,7 +356,7 @@ async fn process_batch(
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_millis(),
+                    .as_millis() as u64,
             });
         }
 
@@ -364,7 +364,7 @@ async fn process_batch(
             order_id: order_ids[idx],
             filled,
             trade_count,
-            latency_ns,
+            latency_ns: latency_ns as u64,
         });
     }
 
@@ -439,7 +439,7 @@ pub async fn handle_latency_stream(socket: WebSocket, state: AppState) {
                     timestamp: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
-                        .as_millis()
+                        .as_millis() as u64
                 };
                 if let Ok(ping_json) = serde_json::to_string(&ping) {
                     if sender.send(Message::Text(ping_json)).await.is_err() {
