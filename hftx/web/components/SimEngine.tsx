@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { submitOrderBatch } from "@/lib/exchange";
+import { openOrderStream, type OrderStreamHandle } from "@/lib/exchange";
 import {
   SEED_MID_TICKS,
   type SubmitSample,
@@ -11,12 +11,11 @@ import {
 } from "@/lib/store";
 import type { Side } from "@/lib/types";
 
-// Cap on simultaneous in-flight batch requests. Each batch carries an entire
-// tick's orders, so 2 is enough to absorb a slow round-trip without queueing
-// up unbounded backlog when the user cranks tick rate or order counts.
-const MAX_INFLIGHT_BATCHES = 2;
-
 type Order = { side: Side; price: number; quantity: number };
+
+// Skip a tick if the WS send buffer is bigger than this. Roughly one fat
+// batch — back-pressure surrogate now that we don't track in-flight requests.
+const BUFFERED_SKIP_THRESHOLD = 64 * 1024;
 
 export function SimEngine() {
   const running = useSimStore((s) => s.running);
@@ -27,14 +26,8 @@ export function SimEngine() {
 
   const recordBatch = useLatencyStore((s) => s.recordBatch);
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const inflightRef = useRef(0);
-  const droppedRef = useRef(0);
-  // Buffer samples produced by fire-and-forget submissions; flushed via RAF.
   const pendingRef = useRef<SubmitSample[]>([]);
 
-  // RAF flush loop: pushes accumulated samples into the store at ~60Hz
-  // instead of once per submission. Keeps render pressure bounded.
   useEffect(() => {
     let raf = 0;
     const flush = () => {
@@ -50,38 +43,21 @@ export function SimEngine() {
   }, [recordBatch]);
 
   useEffect(() => {
-    if (!running) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      return;
-    }
+    if (!running) return;
 
-    const dispatchBatch = (orders: Order[]) => {
-      if (orders.length === 0) return;
-      if (inflightRef.current >= MAX_INFLIGHT_BATCHES) {
-        droppedRef.current += orders.length;
-        return;
-      }
-      inflightRef.current++;
-      const symbol = useMarketStore.getState().symbol;
-      submitOrderBatch(symbol, orders)
-        .then((res) => {
-          // Each entry's latency_ns is the engine's monotonic time inside
-          // submit_limit for that order — the histogram's source of truth.
-          for (let i = 0; i < res.results.length; i++) {
-            const r = res.results[i];
-            pendingRef.current.push({ ns: r.latency_ns, filled: r.filled });
-          }
-        })
-        .catch(() => {
-          // engine offline / 404 — drop silently
-        })
-        .finally(() => {
-          inflightRef.current--;
-        });
-    };
+    const symbol = useMarketStore.getState().symbol;
+
+    const handle: OrderStreamHandle = openOrderStream(
+      symbol,
+      (_seq, results) => {
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          pendingRef.current.push({ ns: r.latency_ns, filled: r.filled });
+        }
+      },
+    );
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = () => {
       const m = useMarketStore.getState();
@@ -127,14 +103,22 @@ export function SimEngine() {
         orders.push({ side, price, quantity });
       }
 
-      // One HTTP request, N orders. Server processes them under a single
-      // write lock and returns engine-measured per-order latency.
-      dispatchBatch(orders);
+      if (
+        orders.length > 0 &&
+        handle.isOpen &&
+        handle.bufferedAmount < BUFFERED_SKIP_THRESHOLD
+      ) {
+        handle.send(orders);
+      }
+
+      timer = setTimeout(tick, useSimStore.getState().tickMs);
     };
 
-    intervalRef.current = setInterval(tick, tickMs);
+    timer = setTimeout(tick, tickMs);
+
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (timer) clearTimeout(timer);
+      handle.close();
     };
   }, [running, makerCount, takerCount, aggression, tickMs]);
 

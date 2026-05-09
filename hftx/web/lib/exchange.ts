@@ -2,11 +2,13 @@
 // Default endpoint is localhost:8080. Override with NEXT_PUBLIC_HFTX_URL.
 
 import type {
+  BatchOrderResult,
   BatchSubmitRequest,
   BatchSubmitResponse,
   DepthStreamMsg,
   MarketDepth,
   OrderBookState,
+  OrderStreamMsg,
   SubmitOrderRequest,
   SubmitOrderResponse,
   SymbolsResponse,
@@ -168,6 +170,87 @@ export function openDepthStream(
     onMessage,
     opts,
   );
+}
+
+export interface OrderStreamHandle {
+  send(orders: SubmitOrderRequest[]): number | null;
+  close(): void;
+  readonly bufferedAmount: number;
+  readonly isOpen: boolean;
+}
+
+export function openOrderStream(
+  symbol: string,
+  onResult: (seq: number, results: BatchOrderResult[], engine_ns: number) => void,
+  opts: {
+    onOpen?: () => void;
+    onClose?: () => void;
+    onError?: (e: Event) => void;
+  } = {},
+): OrderStreamHandle {
+  const url = `${WS_BASE}/symbols/${encodeURIComponent(symbol)}/orders/stream`;
+  let closedByCaller = false;
+  let ws: WebSocket | null = null;
+  let reconnectDelay = 800;
+  let seq = 0;
+
+  const connect = () => {
+    if (closedByCaller) return;
+    ws = new WebSocket(url);
+
+    ws.addEventListener("open", () => {
+      reconnectDelay = 800;
+      opts.onOpen?.();
+    });
+
+    ws.addEventListener("message", (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string) as OrderStreamMsg;
+        if (msg.type === "ping" && ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong", timestamp: msg.timestamp }));
+          return;
+        }
+        if (msg.type === "result") {
+          onResult(msg.seq, msg.results, msg.engine_ns);
+        }
+      } catch {
+        // ignore malformed
+      }
+    });
+
+    ws.addEventListener("error", (e) => {
+      opts.onError?.(e);
+    });
+
+    ws.addEventListener("close", () => {
+      opts.onClose?.();
+      if (closedByCaller) return;
+      const delay = Math.min(reconnectDelay, 8_000);
+      reconnectDelay = Math.min(reconnectDelay * 1.7, 8_000);
+      setTimeout(connect, delay);
+    });
+  };
+
+  connect();
+
+  return {
+    send(orders) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return null;
+      const mySeq = ++seq;
+      ws.send(JSON.stringify({ type: "batch", seq: mySeq, orders }));
+      return mySeq;
+    },
+    close() {
+      closedByCaller = true;
+      ws?.close();
+    },
+    get bufferedAmount() {
+      return ws?.bufferedAmount ?? 0;
+    },
+    get isOpen() {
+      return ws?.readyState === WebSocket.OPEN;
+    },
+  };
 }
 
 function openStream<T>(

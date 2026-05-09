@@ -46,6 +46,40 @@ pub struct BatchSubmitResponse {
     pub engine_ns: u128,
 }
 
+/// Inbound frame on the order WS: a batch plus a client-assigned `seq` so the
+/// caller can match the response back to the originating tick.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderStreamRequest {
+    pub seq: u64,
+    pub orders: Vec<SubmitOrderRequest>,
+}
+
+/// Outbound frame on the order WS: per-order results echoing the request `seq`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderStreamResponse {
+    pub seq: u64,
+    pub results: Vec<BatchOrderResult>,
+    pub engine_ns: u128,
+}
+
+/// Tagged message envelope for the order stream. Inbound clients send either
+/// `batch` (a sequenced order batch) or `ping`. Outbound the server emits
+/// `result` (the matching response), `error`, or `ping`/`pong`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum OrderStreamMessage {
+    #[serde(rename = "batch")]
+    Batch(OrderStreamRequest),
+    #[serde(rename = "result")]
+    Result(OrderStreamResponse),
+    #[serde(rename = "error")]
+    Error { seq: Option<u64>, message: String },
+    #[serde(rename = "ping")]
+    Ping { timestamp: u128 },
+    #[serde(rename = "pong")]
+    Pong { timestamp: u128 },
+}
+
 /// Query parameters for market depth requests.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DepthQuery {

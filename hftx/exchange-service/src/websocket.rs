@@ -5,7 +5,8 @@
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use orderbook::{Order, OrderId};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
 use tracing::{error, info, warn};
 
@@ -216,6 +217,156 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
             }
         }
     }
-    
+
     info!(" Depth stream handler ended for {}", symbol);
-} 
+}
+
+/// Handles a persistent order-submission WebSocket for one symbol. Clients
+/// send `batch` frames carrying a sequence number; the server replies with a
+/// `result` frame per batch echoing the same `seq`. Trades produced by the
+/// matched orders are broadcast on the trade stream as usual.
+pub async fn handle_order_stream(socket: WebSocket, symbol: String, state: AppState) {
+    info!("New order stream connection for {}", symbol);
+
+    let (mut sender, mut receiver) = socket.split();
+    let mut ping_interval = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        let parsed = serde_json::from_str::<OrderStreamMessage>(&text);
+                        match parsed {
+                            Ok(OrderStreamMessage::Batch(req)) => {
+                                let response = process_batch(&symbol, &state, req).await;
+                                let envelope = match response {
+                                    Ok(resp) => OrderStreamMessage::Result(resp),
+                                    Err((seq, message)) => OrderStreamMessage::Error {
+                                        seq: Some(seq),
+                                        message,
+                                    },
+                                };
+                                if let Ok(json) = serde_json::to_string(&envelope) {
+                                    if sender.send(Message::Text(json)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(OrderStreamMessage::Ping { timestamp }) => {
+                                let pong = OrderStreamMessage::Pong { timestamp };
+                                if let Ok(json) = serde_json::to_string(&pong) {
+                                    let _ = sender.send(Message::Text(json)).await;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                let envelope = OrderStreamMessage::Error {
+                                    seq: None,
+                                    message: format!("invalid frame: {}", e),
+                                };
+                                if let Ok(json) = serde_json::to_string(&envelope) {
+                                    let _ = sender.send(Message::Text(json)).await;
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(_))) => {}
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = sender.send(Message::Pong(data)).await;
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) => {
+                        info!("Order stream connection closed for {}", symbol);
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        error!("WebSocket error in order stream: {}", e);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+
+            _ = ping_interval.tick() => {
+                let ping = OrderStreamMessage::Ping {
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis(),
+                };
+                if let Ok(json) = serde_json::to_string(&ping) {
+                    if sender.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    info!("Order stream handler ended for {}", symbol);
+}
+
+async fn process_batch(
+    symbol: &str,
+    state: &AppState,
+    req: OrderStreamRequest,
+) -> Result<OrderStreamResponse, (u64, String)> {
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+
+    let mut order_ids = Vec::with_capacity(req.orders.len());
+    let mut orders = Vec::with_capacity(req.orders.len());
+    for o in req.orders {
+        let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
+        order_ids.push(order_id.0);
+        orders.push(Order {
+            id: order_id,
+            symbol: symbol.to_string(),
+            side: o.side,
+            px_ticks: o.price,
+            qty: o.quantity,
+            ts_ns: now_ns,
+        });
+    }
+
+    let batch_t0 = Instant::now();
+    let per_order = state
+        .exchange
+        .submit_order_batch(symbol, orders)
+        .await
+        .ok_or((req.seq, "symbol not found".to_string()))?;
+    let engine_ns = batch_t0.elapsed().as_nanos();
+
+    let mut results = Vec::with_capacity(per_order.len());
+    for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
+        let trade_count = trades.len();
+        let filled = trade_count > 0;
+
+        for trade in trades {
+            let _ = state.trade_broadcaster.send(TradeEvent {
+                symbol: symbol.to_string(),
+                trade,
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis(),
+            });
+        }
+
+        results.push(BatchOrderResult {
+            order_id: order_ids[idx],
+            filled,
+            trade_count,
+            latency_ns,
+        });
+    }
+
+    Ok(OrderStreamResponse {
+        seq: req.seq,
+        results,
+        engine_ns,
+    })
+}

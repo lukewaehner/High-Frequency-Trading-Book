@@ -102,3 +102,21 @@ export type DepthStreamMsg =
   | ({ type: "depth" } & DepthUpdate)
   | { type: "ping"; timestamp: number }
   | { type: "pong"; timestamp: number };
+
+export interface OrderStreamRequest {
+  seq: number;
+  orders: SubmitOrderRequest[];
+}
+
+export interface OrderStreamResponse {
+  seq: number;
+  results: BatchOrderResult[];
+  engine_ns: number;
+}
+
+export type OrderStreamMsg =
+  | ({ type: "batch" } & OrderStreamRequest)
+  | ({ type: "result" } & OrderStreamResponse)
+  | { type: "error"; seq: number | null; message: string }
+  | { type: "ping"; timestamp: number }
+  | { type: "pong"; timestamp: number };

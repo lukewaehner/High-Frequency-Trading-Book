@@ -45,6 +45,7 @@ async fn main() {
         .route("/symbols/:symbol/orders/:order_id", delete(cancel_order))
         .route("/symbols/:symbol/trades/stream", get(trade_stream))
         .route("/symbols/:symbol/depth/stream", get(depth_stream))
+        .route("/symbols/:symbol/orders/stream", get(order_stream))
         .layer(CorsLayer::permissive())
         .with_state(AppState {
             exchange: exchange.clone(),
@@ -66,6 +67,7 @@ async fn main() {
     info!("  DEL  /symbols/:symbol/orders/:id - Cancel order");
     info!("  WS   /symbols/:symbol/trades/stream - Trade stream");
     info!("  WS   /symbols/:symbol/depth/stream - Depth stream");
+    info!("  WS   /symbols/:symbol/orders/stream - Order submission stream");
 
     axum::serve(listener, app).await.unwrap();
 }
@@ -252,6 +254,15 @@ async fn depth_stream(
     State(state): State<AppState>,
 ) -> Response {
     ws.on_upgrade(move |socket| websocket::handle_depth_stream(socket, symbol, state))
+}
+
+/// WebSocket handler for the persistent order-submission channel.
+async fn order_stream(
+    Path(symbol): Path<String>,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| websocket::handle_order_stream(socket, symbol, state))
 }
 
 /// Application error types for HTTP responses.
