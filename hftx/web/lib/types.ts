@@ -102,3 +102,32 @@ export type DepthStreamMsg =
   | ({ type: "depth" } & DepthUpdate)
   | { type: "ping"; timestamp: number }
   | { type: "pong"; timestamp: number };
+
+export interface BotConfig {
+  symbol: string;
+  makers: number;
+  takers: number;
+  aggression: number;
+  tick_ms: number;
+}
+
+export interface SimStatusEntry {
+  symbol: string;
+  running: boolean;
+  config: BotConfig;
+}
+
+export interface SimStatusResponse {
+  drivers: SimStatusEntry[];
+}
+
+export interface LatencySample {
+  latency_ns: number;
+  filled: boolean;
+  ts_ms: number;
+}
+
+export type LatencyStreamMsg =
+  | ({ type: "latency" } & LatencySample)
+  | { type: "ping"; timestamp: number }
+  | { type: "pong"; timestamp: number };

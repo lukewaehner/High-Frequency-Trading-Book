@@ -6,6 +6,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
 use tokio::time::interval;
 use tracing::{error, info, warn};
 
@@ -218,4 +219,82 @@ pub async fn handle_depth_stream(socket: WebSocket, symbol: String, state: AppSt
     }
     
     info!(" Depth stream handler ended for {}", symbol);
-} 
+}
+
+/// Streams per-order latency samples produced by the server-side bot driver.
+/// Mirrors `handle_trade_stream`: split socket, `tokio::select!` over input +
+/// broadcast + 30s ping.
+pub async fn handle_latency_stream(socket: WebSocket, state: AppState) {
+    info!("New latency stream connection");
+
+    let (mut sender, mut receiver) = socket.split();
+    let mut latency_rx = state.latency_broadcaster.subscribe();
+    let mut ping_interval = interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
+                            if let WebSocketMessage::Ping { timestamp } = ws_msg {
+                                let pong = WebSocketMessage::Pong { timestamp };
+                                if let Ok(pong_json) = serde_json::to_string(&pong) {
+                                    let _ = sender.send(Message::Text(pong_json)).await;
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(_))) => {}
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = sender.send(Message::Pong(data)).await;
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) => {
+                        info!("Latency stream connection closed");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        error!("WebSocket error in latency stream: {}", e);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+
+            sample = latency_rx.recv() => {
+                match sample {
+                    Ok(sample) => {
+                        let ws_msg = WebSocketMessage::Latency(sample);
+                        if let Ok(json) = serde_json::to_string(&ws_msg) {
+                            if sender.send(Message::Text(json)).await.is_err() {
+                                warn!("Failed to send latency sample");
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+
+            _ = ping_interval.tick() => {
+                let ping = WebSocketMessage::Ping {
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis()
+                };
+                if let Ok(ping_json) = serde_json::to_string(&ping) {
+                    if sender.send(Message::Text(ping_json)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    info!("Latency stream handler ended");
+}

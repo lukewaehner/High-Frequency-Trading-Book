@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { submitOrderBatch } from "@/lib/exchange";
+import { openLatencyStream, submitOrderBatch } from "@/lib/exchange";
 import {
   SEED_MID_TICKS,
   type SubmitSample,
@@ -20,6 +20,7 @@ type Order = { side: Side; price: number; quantity: number };
 
 export function SimEngine() {
   const running = useSimStore((s) => s.running);
+  const mode = useSimStore((s) => s.mode);
   const makerCount = useSimStore((s) => s.makerCount);
   const takerCount = useSimStore((s) => s.takerCount);
   const aggression = useSimStore((s) => s.aggression);
@@ -49,8 +50,9 @@ export function SimEngine() {
     return () => cancelAnimationFrame(raf);
   }, [recordBatch]);
 
+  // Browser-side driver: only active when mode === "browser".
   useEffect(() => {
-    if (!running) {
+    if (mode !== "browser" || !running) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -68,8 +70,6 @@ export function SimEngine() {
       const symbol = useMarketStore.getState().symbol;
       submitOrderBatch(symbol, orders)
         .then((res) => {
-          // Each entry's latency_ns is the engine's monotonic time inside
-          // submit_limit for that order — the histogram's source of truth.
           for (let i = 0; i < res.results.length; i++) {
             const r = res.results[i];
             pendingRef.current.push({ ns: r.latency_ns, filled: r.filled });
@@ -127,8 +127,6 @@ export function SimEngine() {
         orders.push({ side, price, quantity });
       }
 
-      // One HTTP request, N orders. Server processes them under a single
-      // write lock and returns engine-measured per-order latency.
       dispatchBatch(orders);
     };
 
@@ -136,7 +134,20 @@ export function SimEngine() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [running, makerCount, takerCount, aggression, tickMs]);
+  }, [mode, running, makerCount, takerCount, aggression, tickMs]);
+
+  // Server-side driver: subscribe to the latency sample stream and feed it
+  // into the same latency store the browser-side path writes to. Server
+  // start/stop is handled by the Sim section's run-toggle; here we only
+  // mirror the metrics.
+  useEffect(() => {
+    if (mode !== "server") return;
+    const symbol = useMarketStore.getState().symbol;
+    const handle = openLatencyStream(symbol, (sample) => {
+      pendingRef.current.push({ ns: sample.latency_ns, filled: sample.filled });
+    });
+    return () => handle.close();
+  }, [mode]);
 
   return null;
 }

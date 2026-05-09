@@ -161,8 +161,11 @@ export function percentile(samples: number[], p: number): number | null {
 
 export type BotProfile = "makers" | "takers";
 
+export type SimMode = "browser" | "server";
+
 interface SimState {
   running: boolean;
+  mode: SimMode;
   makerCount: number;
   takerCount: number;
   /** Aggression 0-100 — higher = wider spreads from makers, more cross attempts from takers. */
@@ -171,6 +174,7 @@ interface SimState {
   tickMs: number;
 
   setRunning: (b: boolean) => void;
+  setMode: (m: SimMode) => void;
   setMakerCount: (n: number) => void;
   setTakerCount: (n: number) => void;
   setAggression: (n: number) => void;
@@ -179,12 +183,14 @@ interface SimState {
 
 export const useSimStore = create<SimState>((set) => ({
   running: false,
+  mode: "browser",
   makerCount: 12,
   takerCount: 6,
   aggression: 45,
   tickMs: 50,
 
   setRunning: (running) => set({ running }),
+  setMode: (mode) => set({ mode }),
   setMakerCount: (makerCount) =>
     set({ makerCount: Math.max(0, Math.min(200, makerCount)) }),
   setTakerCount: (takerCount) =>

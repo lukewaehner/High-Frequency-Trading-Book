@@ -3,7 +3,14 @@
 import { motion, useInView, useReducedMotion } from "framer-motion";
 import { Pause, Play } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef } from "react";
-import { percentile, useLatencyStore, useSimStore } from "@/lib/store";
+import {
+  percentile,
+  type SimMode,
+  useLatencyStore,
+  useMarketStore,
+  useSimStore,
+} from "@/lib/store";
+import { startServerSim, stopServerSim } from "@/lib/exchange";
 import { formatNs, formatQty, formatThroughput } from "@/lib/format";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import { SectionLabel } from "@/components/ui/primitives";
@@ -14,6 +21,8 @@ const EASE_OUT_QUART = [0.25, 1, 0.5, 1] as const;
 export function Sim() {
   const running = useSimStore((s) => s.running);
   const setRunning = useSimStore((s) => s.setRunning);
+  const mode = useSimStore((s) => s.mode);
+  const setMode = useSimStore((s) => s.setMode);
   const makerCount = useSimStore((s) => s.makerCount);
   const setMakerCount = useSimStore((s) => s.setMakerCount);
   const takerCount = useSimStore((s) => s.takerCount);
@@ -45,6 +54,38 @@ export function Sim() {
       setRunning(true);
     }
   }, [inView, setRunning]);
+
+  // When running in server mode, push config to the engine and re-push on any
+  // slider tweak so the bot driver picks up new params live. Stopping the
+  // toggle (or switching back to browser mode) cancels the server task.
+  useEffect(() => {
+    if (mode !== "server") return;
+    const symbol = useMarketStore.getState().symbol;
+    if (running) {
+      startServerSim({
+        symbol,
+        makers: makerCount,
+        takers: takerCount,
+        aggression,
+        tick_ms: tickMs,
+      }).catch(() => {});
+    } else {
+      stopServerSim(symbol).catch(() => {});
+    }
+  }, [mode, running, makerCount, takerCount, aggression, tickMs]);
+
+  // When switching from server -> browser while running, make sure the server
+  // task is torn down even though the running flag stays true.
+  useEffect(() => {
+    if (mode === "browser") {
+      const symbol = useMarketStore.getState().symbol;
+      stopServerSim(symbol).catch(() => {});
+    }
+  }, [mode]);
+
+  const handleRunToggle = () => {
+    setRunning(!running);
+  };
 
   return (
     <section
@@ -83,9 +124,10 @@ export function Sim() {
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
           {/* Controls */}
           <div className="flex flex-col gap-8 lg:col-span-5">
+            <ModeToggle mode={mode} onChange={setMode} disabled={running} />
             <button
               type="button"
-              onClick={() => setRunning(!running)}
+              onClick={handleRunToggle}
               className={`group inline-flex h-14 items-center justify-center gap-3 rounded-full font-mono text-xs uppercase tracking-[0.22em] transition-all active:scale-[0.98] ${
                 running
                   ? "shadow-cta-running bg-fg text-bg hover:bg-fg-muted"
@@ -210,6 +252,62 @@ export function Sim() {
         </div>
       </div>
     </section>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: SimMode;
+  onChange: (m: SimMode) => void;
+  disabled?: boolean;
+}) {
+  const options: { value: SimMode; label: string }[] = [
+    { value: "browser", label: "Browser-side" },
+    { value: "server", label: "Server-side" },
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
+        Load source
+      </span>
+      <div
+        className={`relative grid grid-cols-2 rounded-full border border-line bg-bg-sunken p-1 ${
+          disabled ? "opacity-60" : ""
+        }`}
+      >
+        {options.map((opt) => {
+          const active = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(opt.value)}
+              className={`relative z-10 h-9 rounded-full font-mono text-[10px] uppercase tracking-[0.22em] transition-colors ${
+                active ? "text-bg" : "text-fg-muted hover:text-fg"
+              } ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+            >
+              {active && (
+                <motion.span
+                  layoutId="mode-toggle-pill"
+                  className="absolute inset-0 -z-10 rounded-full bg-amber"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      <span className="font-mono text-[10px] text-fg-dim">
+        {mode === "browser"
+          ? "Browser dispatches one HTTP batch per tick."
+          : "Engine generates orders in-process; histogram fed via WebSocket."}
+      </span>
+    </div>
   );
 }
 
