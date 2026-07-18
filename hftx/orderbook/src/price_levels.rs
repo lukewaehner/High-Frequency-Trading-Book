@@ -141,7 +141,7 @@ impl PriceLevels {
     pub fn peek_best(&self) -> Option<&Order> {
         let px = self.best_price()?;
         let q = self.levels.get(&px)?;
-        
+
         for order in q {
             if !self.canceled.contains(&order.id) {
                 return Some(order);
@@ -158,6 +158,33 @@ impl PriceLevels {
                 .map(|order| order.qty)
                 .sum())
             .unwrap_or(0)
+    }
+
+    /// Total quantity fillable at `limit_px` or better from this side.
+    ///
+    /// For asks: sums qty at all levels where price <= limit_px (a bid willing
+    /// to pay limit_px can sweep everything at or below that price).
+    /// For bids: sums qty at all levels where price >= limit_px (an ask willing
+    /// to sell at limit_px can sweep everything at or above that price).
+    ///
+    /// Used by the FOK pre-check before touching the book.
+    pub fn fillable_qty(&self, limit_px: i64) -> i64 {
+        match self.side {
+            Side::Ask => self.levels.iter()
+                .take_while(|(&px, _)| px <= limit_px)
+                .map(|(_, q)| q.iter()
+                    .filter(|o| !self.canceled.contains(&o.id))
+                    .map(|o| o.qty)
+                    .sum::<i64>())
+                .sum(),
+            Side::Bid => self.levels.iter().rev()
+                .take_while(|(&px, _)| px >= limit_px)
+                .map(|(_, q)| q.iter()
+                    .filter(|o| !self.canceled.contains(&o.id))
+                    .map(|o| o.qty)
+                    .sum::<i64>())
+                .sum(),
+        }
     }
 
     /// Iterate prices in matching priority (best→worst) with total qty per price.
@@ -189,10 +216,10 @@ impl PriceLevels {
     pub fn remove(&mut self, id: OrderId) -> Option<Order> {
         let px_ticks = self.index.remove(&id)?;
         self.canceled.remove(&id);
-        
+
         let q = self.levels.get_mut(&px_ticks)?;
         let mut found_order = None;
-        
+
         let mut temp_orders = Vec::new();
         while let Some(order) = q.pop_front() {
             if order.id == id {
@@ -202,15 +229,15 @@ impl PriceLevels {
                 temp_orders.push(order);
             }
         }
-        
+
         for order in temp_orders.into_iter().rev() {
             q.push_front(order);
         }
-        
+
         if q.is_empty() {
             self.levels.remove(&px_ticks);
         }
-        
+
         found_order
     }
 
@@ -219,7 +246,7 @@ impl PriceLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Order, OrderId, Side};
+    use crate::types::{Order, OrderId, OrderKind, TimeInForce, Side};
 
     #[test]
     fn test_new_empty() {
@@ -241,6 +268,8 @@ mod tests {
             px_ticks: 10100,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
         let o2 = Order {
             id: OrderId(2),
@@ -249,6 +278,8 @@ mod tests {
             px_ticks: 10100,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
         let o3 = Order {
             id: OrderId(3),
@@ -257,6 +288,8 @@ mod tests {
             px_ticks: 10100,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
 
         levels.push(o1.clone());
@@ -292,6 +325,8 @@ mod tests {
             px_ticks: 10200,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // Higher price different time stamp
@@ -302,6 +337,8 @@ mod tests {
             px_ticks: 10250,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // Same idea
@@ -312,6 +349,8 @@ mod tests {
             px_ticks: 10300,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         assert_eq!(asks.best_level_size(), 1);
@@ -323,6 +362,8 @@ mod tests {
             px_ticks: 10200,
             qty: 40,
             ts_ns: 4,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         assert_eq!(asks.best_level_size(), 2);
@@ -340,6 +381,8 @@ mod tests {
             px_ticks: 10100,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         bids.push(Order {
@@ -349,6 +392,8 @@ mod tests {
             px_ticks: 10050,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         assert_eq!(bids.best_level_size(), 1);
@@ -360,6 +405,8 @@ mod tests {
             px_ticks: 10100,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         assert_eq!(bids.best_level_size(), 2);
@@ -386,6 +433,8 @@ mod tests {
             px_ticks: 10200,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         asks.push(Order {
@@ -395,6 +444,8 @@ mod tests {
             px_ticks: 10200,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // add a worse order
@@ -405,6 +456,8 @@ mod tests {
             px_ticks: 10300,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // First pop
@@ -432,6 +485,8 @@ mod tests {
             px_ticks: 10200,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         bids.push(Order {
@@ -441,6 +496,8 @@ mod tests {
             px_ticks: 10200,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // add a worse order
@@ -451,6 +508,8 @@ mod tests {
             px_ticks: 10100,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         });
 
         // First pop
@@ -477,6 +536,8 @@ mod tests {
             px_ticks: 10100,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
         let o2 = Order {
             id: OrderId(2),
@@ -485,6 +546,8 @@ mod tests {
             px_ticks: 10100,
             qty: 20,
             ts_ns: 2,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
         let o3 = Order {
             id: OrderId(3),
@@ -493,6 +556,8 @@ mod tests {
             px_ticks: 10050,
             qty: 30,
             ts_ns: 3,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
 
         bids.push(o1.clone());
@@ -524,9 +589,61 @@ mod tests {
             px_ticks: 10200,
             qty: 10,
             ts_ns: 1,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
         asks.push(o1);
         // you have something and can cancel it? returns true
         assert!(asks.cancel(OrderId(1)));
+    }
+
+    #[test]
+    fn fillable_qty_asks() {
+        let mut asks = PriceLevels::new(Side::Ask);
+        asks.push(Order {
+            id: OrderId(1), symbol: "NVDA".into(), side: Side::Ask,
+            px_ticks: 100, qty: 40, ts_ns: 1,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+        asks.push(Order {
+            id: OrderId(2), symbol: "NVDA".into(), side: Side::Ask,
+            px_ticks: 105, qty: 30, ts_ns: 2,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+        asks.push(Order {
+            id: OrderId(3), symbol: "NVDA".into(), side: Side::Ask,
+            px_ticks: 110, qty: 20, ts_ns: 3,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+
+        assert_eq!(asks.fillable_qty(104), 40);
+        assert_eq!(asks.fillable_qty(105), 70);
+        assert_eq!(asks.fillable_qty(i64::MAX), 90);
+        assert_eq!(asks.fillable_qty(99), 0);
+    }
+
+    #[test]
+    fn fillable_qty_bids() {
+        let mut bids = PriceLevels::new(Side::Bid);
+        bids.push(Order {
+            id: OrderId(1), symbol: "NVDA".into(), side: Side::Bid,
+            px_ticks: 100, qty: 40, ts_ns: 1,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+        bids.push(Order {
+            id: OrderId(2), symbol: "NVDA".into(), side: Side::Bid,
+            px_ticks: 95, qty: 30, ts_ns: 2,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+        bids.push(Order {
+            id: OrderId(3), symbol: "NVDA".into(), side: Side::Bid,
+            px_ticks: 90, qty: 20, ts_ns: 3,
+            kind: OrderKind::Limit, tif: TimeInForce::Day,
+        });
+
+        assert_eq!(bids.fillable_qty(101), 0);
+        assert_eq!(bids.fillable_qty(100), 40);
+        assert_eq!(bids.fillable_qty(95), 70);
+        assert_eq!(bids.fillable_qty(i64::MIN), 90);
     }
 }

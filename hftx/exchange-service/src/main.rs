@@ -10,7 +10,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use orderbook::{OrderBook, Order, OrderId, Side, Trade};
+use orderbook::{Order, OrderId, OrderKind, Side, Trade};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -146,13 +146,20 @@ async fn submit_order(
 ) -> Result<impl IntoResponse, AppError> {
     let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
     
-    let order = Order {
-        id: order_id,
-        symbol: symbol.clone(),
-        side: request.side,
-        px_ticks: request.price,
-        qty: request.quantity,
-        ts_ns: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+    let ts_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let order = if request.kind == OrderKind::Market {
+        Order::market(order_id, &symbol, request.side, request.quantity, ts_ns)
+    } else {
+        Order {
+            id: order_id,
+            symbol: symbol.clone(),
+            side: request.side,
+            px_ticks: request.price,
+            qty: request.quantity,
+            ts_ns,
+            kind: request.kind,
+            tif: request.tif,
+        }
     };
 
     let trades = state.exchange.submit_order(symbol.clone(), order).await
@@ -193,13 +200,19 @@ async fn submit_order_batch(
     for req in request.orders {
         let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
         order_ids.push(order_id.0);
-        orders.push(Order {
-            id: order_id,
-            symbol: symbol.clone(),
-            side: req.side,
-            px_ticks: req.price,
-            qty: req.quantity,
-            ts_ns: now_ns,
+        orders.push(if req.kind == OrderKind::Market {
+            Order::market(order_id, &symbol, req.side, req.quantity, now_ns)
+        } else {
+            Order {
+                id: order_id,
+                symbol: symbol.clone(),
+                side: req.side,
+                px_ticks: req.price,
+                qty: req.quantity,
+                ts_ns: now_ns,
+                kind: req.kind,
+                tif: req.tif,
+            }
         });
     }
 

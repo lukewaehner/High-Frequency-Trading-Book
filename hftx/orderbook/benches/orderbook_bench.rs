@@ -3,17 +3,8 @@ use orderbook::{OrderBook, Order, OrderId, Side};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn create_order(id: u128, symbol: &str, side: Side, price: i64, qty: i64) -> Order {
-    Order {
-        id: OrderId(id),
-        symbol: symbol.to_string(),
-        side,
-        px_ticks: price,
-        qty,
-        ts_ns: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    }
+    let ts_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    Order::limit(OrderId(id), symbol, side, price, qty, ts_ns)
 }
 
 fn bench_order_submission(c: &mut Criterion) {

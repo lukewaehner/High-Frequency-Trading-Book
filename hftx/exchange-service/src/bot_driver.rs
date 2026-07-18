@@ -217,14 +217,7 @@ fn make_order(symbol: &str, side: Side, price: i64, qty: i64) -> Order {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    Order {
-        id: OrderId(uuid::Uuid::new_v4().as_u128()),
-        symbol: symbol.to_string(),
-        side,
-        px_ticks: price,
-        qty,
-        ts_ns: now_ns,
-    }
+    Order::limit(OrderId(uuid::Uuid::new_v4().as_u128()), symbol, side, price, qty, now_ns)
 }
 
 struct XorShiftRng(u64);

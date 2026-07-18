@@ -1,14 +1,18 @@
 //! API types for REST and WebSocket interfaces.
 
-use orderbook::{Side, Trade};
+use orderbook::{OrderKind, Side, TimeInForce, Trade};
 use serde::{Deserialize, Serialize};
 
-/// Request to submit a new limit order.
+/// Request to submit an order. `kind` defaults to `Limit`, `tif` defaults to `Day`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SubmitOrderRequest {
     pub side: Side,
     pub price: i64,
     pub quantity: i64,
+    #[serde(default)]
+    pub kind: OrderKind,
+    #[serde(default)]
+    pub tif: TimeInForce,
 }
 
 /// Response after submitting an order.

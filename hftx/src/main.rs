@@ -31,24 +31,10 @@ fn run_basic_demo() {
     println!("HFT Ledger - Order Book Demo");
     
     // Add ask order at $150.00
-    let ask_order = Order {
-        id: OrderId(1),
-        symbol: "AAPL".to_string(),
-        side: Side::Ask,
-        px_ticks: 15000, // $150.00 in ticks
-        qty: 100,
-        ts_ns: 1_000_000_000,
-    };
-    
+    let ask_order = Order::limit(OrderId(1), "AAPL", Side::Ask, 15000, 100, 1_000_000_000);
+
     // Add bid order at $149.50 (creates spread)
-    let bid_order = Order {
-        id: OrderId(2),
-        symbol: "AAPL".to_string(),
-        side: Side::Bid,
-        px_ticks: 14950, // $149.50 in ticks
-        qty: 50,
-        ts_ns: 1_000_000_001,
-    };
+    let bid_order = Order::limit(OrderId(2), "AAPL", Side::Bid, 14950, 50, 1_000_000_001);
     
     println!("Submitting ask order: {} @ {}", ask_order.qty, ask_order.px_ticks);
     ob.submit_limit(ask_order);
@@ -60,14 +46,7 @@ fn run_basic_demo() {
     println!("Best ask: {:?}", ob.best_ask());
     
     // Crossing bid that will execute against the ask
-    let crossing_bid = Order {
-        id: OrderId(3),
-        symbol: "AAPL".to_string(),
-        side: Side::Bid,
-        px_ticks: 15000, // Matches ask price
-        qty: 75,         // Partial fill of ask order
-        ts_ns: 1_000_000_002,
-    };
+    let crossing_bid = Order::limit(OrderId(3), "AAPL", Side::Bid, 15000, 75, 1_000_000_002);
     
     println!("Submitting crossing bid: {} @ {}", crossing_bid.qty, crossing_bid.px_ticks);
     let trades = ob.submit_limit(crossing_bid);

@@ -7,6 +7,8 @@
 // for sim bots (they never cancel).
 
 export type Side = "Bid" | "Ask";
+export type OrderKind = "Limit" | "Market";
+export type TimeInForce = "Day" | "IOC" | "FOK";
 
 export interface Trade {
   maker: number;
@@ -44,6 +46,8 @@ export interface SubmitOrderRequest {
   side: Side;
   price: number;
   quantity: number;
+  kind?: OrderKind;
+  tif?: TimeInForce;
 }
 
 export interface SubmitOrderResponse {

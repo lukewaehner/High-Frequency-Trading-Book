@@ -5,7 +5,7 @@
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{sink::SinkExt, stream::StreamExt};
-use orderbook::{Order, OrderId};
+use orderbook::{Order, OrderId, OrderKind};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::time::interval;
@@ -326,13 +326,19 @@ async fn process_batch(
     for o in req.orders {
         let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
         order_ids.push(order_id.0);
-        orders.push(Order {
-            id: order_id,
-            symbol: symbol.to_string(),
-            side: o.side,
-            px_ticks: o.price,
-            qty: o.quantity,
-            ts_ns: now_ns,
+        orders.push(if o.kind == OrderKind::Market {
+            Order::market(order_id, symbol, o.side, o.quantity, now_ns)
+        } else {
+            Order {
+                id: order_id,
+                symbol: symbol.to_string(),
+                side: o.side,
+                px_ticks: o.price,
+                qty: o.quantity,
+                ts_ns: now_ns,
+                kind: o.kind,
+                tif: o.tif,
+            }
         });
     }
 

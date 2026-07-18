@@ -13,9 +13,10 @@ pub enum Side {
 }
 
 /// Time-in-force instructions for order lifetime.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TimeInForce {
     /// Active until end of trading session
+    #[default]
     Day,
     /// Execute immediately, cancel remainder
     IOC,
@@ -24,9 +25,10 @@ pub enum TimeInForce {
 }
 
 /// Order execution type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OrderKind {
     /// Execute only at specified price or better
+    #[default]
     Limit,
     /// Execute immediately at best available price
     Market,
@@ -42,9 +44,29 @@ pub struct Order {
     pub id: OrderId,
     pub symbol: String,
     pub side: Side,
-    pub px_ticks: i64, // Price in integer ticks
-    pub qty: i64,      // Quantity in shares/lots
-    pub ts_ns: u128,   // Timestamp in nanoseconds
+    pub px_ticks: i64,       // Price in integer ticks; i64::MAX/MIN for market orders
+    pub qty: i64,            // Quantity in shares/lots
+    pub ts_ns: u128,         // Timestamp in nanoseconds
+    pub kind: OrderKind,
+    pub tif: TimeInForce,
+}
+
+impl Order {
+    /// Limit order: rests in book if not immediately matched.
+    pub fn limit(id: OrderId, symbol: &str, side: Side, px_ticks: i64, qty: i64, ts_ns: u128) -> Self {
+        Self { id, symbol: symbol.to_string(), side, px_ticks, qty, ts_ns, kind: OrderKind::Limit, tif: TimeInForce::Day }
+    }
+
+    /// Market order: crosses at any available price; remainder is always discarded (IOC semantics).
+    /// Uses sentinel prices (i64::MAX for buys, i64::MIN for sells) so the existing
+    /// crossing logic works without any special-casing.
+    pub fn market(id: OrderId, symbol: &str, side: Side, qty: i64, ts_ns: u128) -> Self {
+        let px_ticks = match side {
+            Side::Bid => i64::MAX,
+            Side::Ask => i64::MIN,
+        };
+        Self { id, symbol: symbol.to_string(), side, px_ticks, qty, ts_ns, kind: OrderKind::Market, tif: TimeInForce::IOC }
+    }
 }
 
 /// Trade execution record.
@@ -71,6 +93,8 @@ mod tests {
             px_ticks: 195_430,
             qty: 100,
             ts_ns: 123_456_789,
+            kind: OrderKind::Limit,
+            tif: TimeInForce::Day,
         };
 
         let t = Trade {

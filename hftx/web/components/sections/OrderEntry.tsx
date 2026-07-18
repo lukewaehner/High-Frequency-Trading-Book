@@ -5,6 +5,7 @@ import { submitOrderTimed } from "@/lib/exchange";
 import { useLatencyStore, useMarketStore } from "@/lib/store";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import type { OrderKind, TimeInForce } from "@/lib/types";
 
 export function OrderEntry({ className }: { className?: string }) {
   const symbol = useMarketStore((s) => s.symbol);
@@ -13,6 +14,8 @@ export function OrderEntry({ className }: { className?: string }) {
   const recordSubmit = useLatencyStore((s) => s.recordSubmit);
 
   const [side, setSide] = useState<"Bid" | "Ask">("Bid");
+  const [kind, setKind] = useState<OrderKind>("Limit");
+  const [tif, setTif] = useState<TimeInForce>("Day");
   const [price, setPrice] = useState<string>("");
   const [qty, setQty] = useState<string>("25");
   const [status, setStatus] = useState<
@@ -27,11 +30,13 @@ export function OrderEntry({ className }: { className?: string }) {
       ? (bestBid ?? bestAsk ?? null)
       : (bestAsk ?? bestBid ?? null);
 
+  const isMarket = kind === "Market";
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const parsedPx = price.trim() === "" ? refPrice : Number(price);
+    const parsedPx = isMarket ? 0 : (price.trim() === "" ? refPrice : Number(price));
     const parsedQty = Number(qty);
-    if (!parsedPx || Number.isNaN(parsedPx) || parsedPx <= 0) {
+    if (!isMarket && (!parsedPx || Number.isNaN(parsedPx) || parsedPx <= 0)) {
       setStatus({ kind: "error", message: "Enter a valid price (in ticks)" });
       return;
     }
@@ -44,14 +49,16 @@ export function OrderEntry({ className }: { className?: string }) {
     try {
       const res = await submitOrderTimed(symbol, {
         side,
-        price: Math.round(parsedPx),
+        price: Math.round(parsedPx ?? 0),
         quantity: Math.round(parsedQty),
+        kind,
+        tif: isMarket ? undefined : tif,
       });
       recordSubmit(res.latency_ns, res.trades.length > 0);
       setStatus({
         kind: res.trades.length > 0 ? "filled" : "rested",
         qty: parsedQty,
-        px: Math.round(parsedPx),
+        px: Math.round(parsedPx ?? 0),
         latency_ns: res.latency_ns,
       });
     } catch (err) {
@@ -103,23 +110,59 @@ export function OrderEntry({ className }: { className?: string }) {
         </button>
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label className="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
-          Price (ticks)
-        </label>
-        <input
-          inputMode="numeric"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          placeholder={refPrice != null ? String(refPrice) : "—"}
-          className="h-9 rounded-md border border-line bg-bg-sunken px-3 font-mono text-sm tabular-nums text-fg outline-none transition-colors focus:border-amber"
-        />
-        {refPrice != null && (
-          <span className="font-mono text-[10px] text-fg-dim">
-            ≈ {formatPrice(Number(price) || refPrice)}
-          </span>
+      {/* Order kind + TIF row */}
+      <div className="flex items-center gap-2">
+        <div className="flex overflow-hidden rounded-full border border-line">
+          {(["Limit", "Market"] as OrderKind[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setKind(k)}
+              className={cn(
+                "flex h-7 items-center px-3 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors",
+                kind === k
+                  ? "bg-amber/20 text-amber"
+                  : "text-fg-dim hover:text-fg",
+              )}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
+
+        {!isMarket && (
+          <select
+            value={tif}
+            onChange={(e) => setTif(e.target.value as TimeInForce)}
+            className="h-7 rounded-full border border-line bg-bg-sunken px-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-fg-dim outline-none transition-colors focus:border-amber focus:text-fg"
+          >
+            <option value="Day">Day</option>
+            <option value="IOC">IOC</option>
+            <option value="FOK">FOK</option>
+          </select>
         )}
       </div>
+
+      {/* Price field — hidden for market orders */}
+      {!isMarket && (
+        <div className="flex flex-col gap-1.5">
+          <label className="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
+            Price (ticks)
+          </label>
+          <input
+            inputMode="numeric"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder={refPrice != null ? String(refPrice) : "—"}
+            className="h-9 rounded-md border border-line bg-bg-sunken px-3 font-mono text-sm tabular-nums text-fg outline-none transition-colors focus:border-amber"
+          />
+          {refPrice != null && (
+            <span className="font-mono text-[10px] text-fg-dim">
+              ≈ {formatPrice(Number(price) || refPrice)}
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <label className="font-mono text-[10px] uppercase tracking-[0.22em] text-fg-dim">
@@ -147,24 +190,27 @@ export function OrderEntry({ className }: { className?: string }) {
             "inset 0 1px 0 oklch(1 0 0 / 0.18), inset 0 -1px 0 oklch(0 0 0 / 0.3)",
         }}
       >
-        {status.kind === "pending" ? "Submitting…" : `Send ${side}`}
+        {status.kind === "pending"
+          ? "Submitting…"
+          : `${isMarket ? "Market " : ""}${side === "Bid" ? "Buy" : "Sell"}`}
       </button>
 
-      <StatusLine status={status} />
+      <StatusLine status={status} isMarket={isMarket} />
     </form>
   );
 }
 
 function StatusLine({
   status,
+  isMarket,
 }: {
   status:
     | { kind: "idle" }
     | { kind: "pending" }
     | { kind: "rested" | "filled"; qty: number; px: number; latency_ns: number }
     | { kind: "error"; message: string };
+  isMarket: boolean;
 }) {
-  // Reserve consistent vertical space so layout doesn't jump between states.
   const wrapperBase = "min-h-[3.25rem]";
 
   if (status.kind === "idle") {
@@ -218,8 +264,12 @@ function StatusLine({
       </div>
       <div className="font-mono text-[13px] tabular-nums text-fg">
         {status.qty}
-        <span className="mx-1.5 text-fg-dim">@</span>
-        {formatPrice(status.px)}
+        {!isMarket && (
+          <>
+            <span className="mx-1.5 text-fg-dim">@</span>
+            {formatPrice(status.px)}
+          </>
+        )}
       </div>
     </div>
   );
