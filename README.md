@@ -4,10 +4,10 @@ A price-time-priority matching engine in Rust, with a real-time exchange service
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  hftx/web        Next.js + React + Zustand + Framer Motion       │
+│  web             Next.js + React + Zustand + Framer Motion       │
 │                  Live order book, depth ladder, latency lab UI   │
 ├──────────────────────────────────────────────────────────────────┤
-│  hftx/cli        clap-driven HTTP client (submit / cancel /      │
+│  cli             clap-driven HTTP client (submit / cancel /      │
 │                  depth / status / health)                        │
 ├──────────────────────────────────────────────────────────────────┤
 │  exchange-service  Axum HTTP + WebSocket; multi-symbol Exchange  │
@@ -20,7 +20,7 @@ A price-time-priority matching engine in Rust, with a real-time exchange service
 
 ## Performance
 
-Numbers from the `cargo run --release` lab on an M-series Mac. See [`hftx/src/latency_test.rs`](hftx/src/latency_test.rs) for the harness.
+Numbers from the `cargo run --release` lab on an M-series Mac. See [`src/latency_test.rs`](src/latency_test.rs) for the harness.
 
 | Path                     | Latency / throughput           |
 | ------------------------ | ------------------------------ |
@@ -38,10 +38,9 @@ Numbers from the `cargo run --release` lab on an M-series Mac. See [`hftx/src/la
 
 ## Quick start
 
-Everything is wired through the workspace `Makefile` at `hftx/`.
+Everything is wired through the workspace `Makefile` at the repo root.
 
 ```bash
-cd hftx
 make dev
 ```
 
@@ -72,40 +71,39 @@ clean-all   Also clean web build cache and node_modules
 ## Repository layout
 
 ```
-HFT-Ledger/
+hftx/
 ├── README.md                       (this file)
-└── hftx/
-    ├── Cargo.toml                  workspace manifest
-    ├── Makefile                    workspace runner
-    ├── scripts/dev.sh              parallel engine + web runner
-    │
-    ├── orderbook/                  core matching engine (library crate)
-    │   ├── src/
-    │   │   ├── lib.rs                OrderBook implementation
-    │   │   ├── price_levels.rs       per-side BTreeMap + FIFO queues
-    │   │   ├── stdio_rendering.rs    pretty-print for tests / lab
-    │   │   └── types.rs              Order, Trade, OrderId, Side
-    │   └── benches/orderbook_bench.rs  Criterion suite
-    │
-    ├── exchange-service/           Axum REST + WS server
-    │   ├── src/
-    │   │   ├── main.rs               routes, app state, error mapping
-    │   │   ├── exchange.rs           multi-symbol Exchange coordinator
-    │   │   ├── websocket.rs          trade + depth stream handlers
-    │   │   └── types.rs              wire types
-    │   └── Cargo.toml
-    │
-    ├── cli/                        clap-based HTTP client
-    │   └── src/main.rs               Submit / Cancel / Depth / Status / Symbols / Health
-    │
-    ├── src/                        latency / throughput lab (root crate)
-    │   ├── main.rs                   demo runner
-    │   └── latency_test.rs           micro-benchmarks
-    │
-    └── web/                        Next.js + React + Tailwind v4 front end
-        ├── app/                      App-Router entry
-        ├── components/               Hero, Ladder, OrderEntry, Engine, Sim, TopBar
-        └── lib/                      exchange client, Zustand stores, formatters
+├── Cargo.toml                      workspace manifest
+├── Makefile                        workspace runner
+├── scripts/dev.sh                  parallel engine + web runner
+│
+├── orderbook/                      core matching engine (library crate)
+│   ├── src/
+│   │   ├── lib.rs                    OrderBook implementation
+│   │   ├── price_levels.rs           per-side BTreeMap + FIFO queues
+│   │   ├── stdio_rendering.rs        pretty-print for tests / lab
+│   │   └── types.rs                  Order, Trade, OrderId, Side
+│   └── benches/orderbook_bench.rs      Criterion suite
+│
+├── exchange-service/               Axum REST + WS server
+│   ├── src/
+│   │   ├── main.rs                   routes, app state, error mapping
+│   │   ├── exchange.rs               multi-symbol Exchange coordinator
+│   │   ├── websocket.rs              trade + depth stream handlers
+│   │   └── types.rs                  wire types
+│   └── Cargo.toml
+│
+├── cli/                            clap-based HTTP client
+│   └── src/main.rs                   Submit / Cancel / Depth / Status / Symbols / Health
+│
+├── src/                            latency / throughput lab (root crate)
+│   ├── main.rs                       demo runner
+│   └── latency_test.rs               micro-benchmarks
+│
+└── web/                            Next.js + React + Tailwind v4 front end
+    ├── app/                          App-Router entry
+    ├── components/                   Hero, Ladder, OrderEntry, Engine, Sim, TopBar
+    └── lib/                          exchange client, Zustand stores, formatters
 ```
 
 ## Components
@@ -164,7 +162,7 @@ WS trade event:
 ### `cli` (HTTP client)
 
 ```bash
-# from hftx/
+# from repo root
 make cli ARGS="health"
 make cli ARGS="symbols"
 make cli ARGS="depth --symbol AAPL --levels 5"
@@ -182,7 +180,7 @@ Next.js 16 + React 19 + Tailwind v4 + Zustand + Framer Motion. The page IS the p
 - `app/page.tsx` composes the sections: `TopBar`, `Hero`, `Ladder`, `Sim`, `Engine`.
 - `lib/store.ts` holds two Zustand stores: `useMarketStore` (book, trades, connected) and `useLatencyStore` (samples, throughputOps).
 - `lib/exchange.ts` wraps the REST + WS endpoints. `NEXT_PUBLIC_HFTX_URL` overrides the default `http://localhost:8080`.
-- See [`hftx/web/README.md`](hftx/web/README.md) for the front-end-specific notes.
+- See [`web/README.md`](web/README.md) for the front-end-specific notes.
 
 ### `src/` (latency lab)
 
