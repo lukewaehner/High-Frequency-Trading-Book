@@ -1,6 +1,6 @@
 # HFTX
 
-A price-time-priority matching engine in Rust, with a real-time exchange service, a CLI client, and a Next.js front end that drives the engine live in the browser.
+A price-time-priority matching engine written in Rust, wrapped in a small exchange service, a CLI, and a Next.js front end that drives the engine live in the browser. It started as a "how fast can a toy order book go" experiment and grew a UI so the latency numbers are something you can watch instead of read.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -13,45 +13,45 @@ A price-time-priority matching engine in Rust, with a real-time exchange service
 │  exchange-service  Axum HTTP + WebSocket; multi-symbol Exchange  │
 │                    coordinator; broadcast channels for trades    │
 ├──────────────────────────────────────────────────────────────────┤
-│  orderbook       Lock-light core: BTreeMap price levels, FIFO    │
+│  orderbook       Core matching: BTreeMap price levels, FIFO      │
 │                  per-level queues, lazy cancel, partial fills    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Performance
 
-Numbers from the `cargo run --release` lab on an M-series Mac. See [`src/latency_test.rs`](src/latency_test.rs) for the harness.
+These come from the latency lab (`cargo run --release`, or `make perf`) on an M-series Mac. They'll vary with your hardware, but the shape holds. The harness lives in [`src/latency_test.rs`](src/latency_test.rs).
 
-| Path                     | Latency / throughput           |
-| ------------------------ | ------------------------------ |
-| Best bid / ask lookup    | 3 to 6 ns                      |
-| Order submission         | ~113 ns                        |
-| Cross-spread match       | ~1.47 µs end-to-end            |
-| Sustained throughput     | 200k to 500k orders / sec      |
-| WebSocket fan-out        | < 100 µs                       |
+| Path                  | Latency / throughput      |
+| --------------------- | ------------------------- |
+| Best bid / ask lookup | 3–6 ns                    |
+| Order submission      | ~113 ns                   |
+| Cross-spread match    | ~1.47 µs end-to-end       |
+| Sustained throughput  | 200k–500k orders / sec    |
+| WebSocket fan-out     | < 100 µs                  |
 
 ## Prerequisites
 
-- Rust 1.82+ (workspace edition 2021)
-- Node 20+ and `pnpm` (the web app uses pnpm)
-- GNU `make` (any recent macOS / Linux box)
+- Rust 1.82+ (workspace is edition 2021)
+- Node 20+ and `pnpm` for the web app
+- GNU `make` — anything recent on macOS or Linux is fine
 
 ## Quick start
 
-Everything is wired through the workspace `Makefile` at the repo root.
+Everything runs through the workspace `Makefile` at the repo root:
 
 ```bash
 make dev
 ```
 
-That spawns:
+That brings up two processes:
 
-- the exchange service on `http://localhost:8080` (REST + WS)
+- the exchange service on `http://localhost:8080` (REST + WebSocket)
 - the Next.js web app on `http://localhost:3000`
 
-Ctrl-C tears both down. Browse `localhost:3000` and the front end connects to the engine over the env-default `NEXT_PUBLIC_HFTX_URL=http://localhost:8080`.
+Open `localhost:3000` and the front end connects to the engine at the default `NEXT_PUBLIC_HFTX_URL=http://localhost:8080`. Ctrl-C stops both.
 
-`make help` lists the rest:
+The rest of the targets, from `make help`:
 
 ```
 help        Show this help
@@ -89,7 +89,7 @@ hftx/
 │   ├── src/
 │   │   ├── main.rs                   routes, app state, error mapping
 │   │   ├── exchange.rs               multi-symbol Exchange coordinator
-│   │   ├── websocket.rs              trade + depth stream handlers
+│   │   ├── websocket.rs              trade + depth + order stream handlers
 │   │   └── types.rs                  wire types
 │   └── Cargo.toml
 │
@@ -110,39 +110,40 @@ hftx/
 
 ### `orderbook` (core)
 
-A lock-light price-time-priority matching engine.
+The matching engine. Prices are integer ticks and time priority is nanosecond timestamps, so there's no floating point anywhere in the hot path.
 
-- BTreeMap on each side for O(log n) best-price access.
-- VecDeque per price level for FIFO match order at the level.
-- Lazy cancel: cancelled orders linger on the queue and are skipped at match time, avoiding mid-queue removal cost.
-- Partial fills cascade through the queue until the taker is exhausted or the level is empty.
+- A `BTreeMap` on each side gives O(log n) access to the best price.
+- Each price level is a `VecDeque`, so fills at a level come out in FIFO order.
+- Cancels are lazy: a cancelled order stays on the queue and gets skipped when it reaches the front, which keeps us out of the mid-queue removal cost.
+- Partial fills walk the queue until the taker is exhausted or the level empties.
 
 ```rust
 use orderbook::{Order, OrderBook, OrderId, Side};
 
 let mut book = OrderBook::new();
-book.submit_limit(Order { id: OrderId(1), symbol: "AAPL".into(),
-    side: Side::Ask, px_ticks: 15_000, qty: 100, ts_ns: 0 });
-let trades = book.submit_limit(Order { id: OrderId(2), symbol: "AAPL".into(),
-    side: Side::Bid, px_ticks: 15_000, qty: 60, ts_ns: 1 });
+book.submit_limit(Order::limit(OrderId(1), "AAPL", Side::Ask, 15_000, 100, 0));
+let trades = book.submit_limit(Order::limit(OrderId(2), "AAPL", Side::Bid, 15_000, 60, 1));
 assert_eq!(trades.len(), 1);
 ```
 
 ### `exchange-service` (HTTP + WS)
 
-Axum 0.7 server. Multi-symbol `Exchange` holding one `OrderBook` per symbol behind `RwLock`. Trade events are fanned out via a `broadcast::Sender<TradeEvent>`; depth snapshots are polled by the WS depth handler.
+An Axum 0.7 server around the engine. State is a `DashMap<String, RwLock<OrderBook>>` — one lock-guarded book per symbol, so unrelated symbols never contend. It boots with a handful of seeded symbols (AAPL, TSLA, MSFT, NVDA, GOOGL). Trades fan out over a `broadcast` channel; the depth stream polls snapshots on an interval.
 
-| Method | Path                                  | Notes                                         |
-| ------ | ------------------------------------- | --------------------------------------------- |
-| GET    | `/health`                             | Liveness + version                            |
-| GET    | `/symbols`                            | Active symbols                                |
-| GET    | `/symbols/:symbol/orderbook`          | Best bid / ask + level counts                 |
-| GET    | `/symbols/:symbol/depth?levels=10`    | N-level market depth                          |
-| POST   | `/symbols/:symbol/orders`             | Submit a single order, returns trades         |
-| POST   | `/symbols/:symbol/orders/batch`       | Submit a batch, returns per-order latency_ns  |
-| DELETE | `/symbols/:symbol/orders/:order_id`   | Cancel an order                               |
-| WS     | `/symbols/:symbol/trades/stream`      | Live trade events                             |
-| WS     | `/symbols/:symbol/depth/stream`       | Live depth snapshots                          |
+| Method | Path                                | Notes                                          |
+| ------ | ----------------------------------- | ---------------------------------------------- |
+| GET    | `/health`                           | Liveness + version                             |
+| GET    | `/symbols`                          | Active symbols                                 |
+| GET    | `/symbols/:symbol/orderbook`        | Best bid / ask + level counts                  |
+| GET    | `/symbols/:symbol/depth?levels=10`  | N-level market depth                           |
+| POST   | `/symbols/:symbol/orders`           | Submit a single order, returns trades          |
+| POST   | `/symbols/:symbol/orders/batch`     | Submit a batch, returns per-order `latency_ns` |
+| DELETE | `/symbols/:symbol/orders/:order_id` | Cancel an order                                |
+| WS     | `/symbols/:symbol/trades/stream`    | Live trade events (JSON)                       |
+| WS     | `/symbols/:symbol/depth/stream`     | Live depth snapshots (JSON)                    |
+| WS     | `/symbols/:symbol/orders/stream`    | Order submission over MessagePack frames       |
+
+The order-submission WebSocket is the one binary channel: frames are MessagePack (`rmp-serde`) rather than JSON, which is why it lives apart from the JSON trade and depth streams. There's also a small `/sim/*` group (`start`, `stop`, `status`, and a `latency/stream` WS) that the front end uses to run and observe the in-browser order generator.
 
 Submit body:
 
@@ -171,20 +172,21 @@ make cli ARGS="status --symbol AAPL"
 make cli ARGS="cancel --symbol AAPL --order-id 12345"
 ```
 
-The CLI defaults to `http://localhost:8080`. Override with `--server` (e.g. `make cli ARGS="--server http://example:8080 health"`).
+It talks to `http://localhost:8080` by default. Point it elsewhere with `--server`, e.g. `make cli ARGS="--server http://example:8080 health"`.
 
 ### `web` (front end)
 
-Next.js 16 + React 19 + Tailwind v4 + Zustand + Framer Motion. The page IS the product: visitors land on a live read-out of the running engine and can drive it via the in-page sim.
+Next.js 16, React 19, Tailwind v4, Zustand, Framer Motion. There's no separate dashboard — the landing page is the app. You load it onto a live read-out of the running engine and drive it with the in-page sim.
 
-- `app/page.tsx` composes the sections: `TopBar`, `Hero`, `Ladder`, `Sim`, `Engine`.
-- `lib/store.ts` holds two Zustand stores: `useMarketStore` (book, trades, connected) and `useLatencyStore` (samples, throughputOps).
-- `lib/exchange.ts` wraps the REST + WS endpoints. `NEXT_PUBLIC_HFTX_URL` overrides the default `http://localhost:8080`.
-- See [`web/README.md`](web/README.md) for the front-end-specific notes.
+- `app/page.tsx` stitches the sections together: `TopBar`, `Hero`, `Ladder`, `Sim`, `Engine`.
+- `lib/store.ts` has two Zustand stores — `useMarketStore` (book, trades, connected) and `useLatencyStore` (samples, throughputOps).
+- `lib/exchange.ts` wraps the REST + WS endpoints; set `NEXT_PUBLIC_HFTX_URL` to override the `http://localhost:8080` default.
+
+Front-end-specific notes are in [`web/README.md`](web/README.md).
 
 ### `src/` (latency lab)
 
-The workspace root crate (`hftx`) is the latency / throughput harness. It pegs an in-process `OrderBook`, runs scripted scenarios, and prints percentiles.
+The workspace root crate (`hftx`) is the benchmark harness. It runs an in-process `OrderBook` through scripted scenarios and prints percentiles — no server, no network, just the engine.
 
 ```bash
 make perf
@@ -194,21 +196,23 @@ make perf
 
 ```bash
 make test                 # cargo test --workspace
-cargo test -p orderbook   # core matching engine unit tests
+cargo test -p orderbook   # just the matching-engine unit tests
 ```
 
 ## Benchmarks
 
 ```bash
 make bench
-# orderbook/target/criterion/report/index.html for the HTML report
+# HTML report: orderbook/target/criterion/report/index.html
 ```
 
 ## Configuration
 
-- `NEXT_PUBLIC_HFTX_URL` (web) — base URL for REST + WS. Default `http://localhost:8080`.
-- `RUST_LOG` (engine) — tracing filter. Try `RUST_LOG=info make engine` for the verbose path.
+- `NEXT_PUBLIC_HFTX_URL` (web) — base URL for REST + WS. Defaults to `http://localhost:8080`.
+- `RUST_LOG` (engine) — tracing filter. `RUST_LOG=info make engine` gets you the chatty startup log.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT.
+</content>
+</invoke>
