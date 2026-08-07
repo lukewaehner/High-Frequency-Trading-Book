@@ -351,11 +351,11 @@ async fn process_batch(
     let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
     let mut results = Vec::with_capacity(per_order.len());
-    for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
-        let trade_count = trades.len();
+    for (idx, (outcome, latency_ns)) in per_order.into_iter().enumerate() {
+        let trade_count = outcome.trades.len();
         let filled = trade_count > 0;
 
-        for trade in trades {
+        for trade in outcome.trades {
             let _ = state.trade_broadcaster.send(TradeEvent {
                 symbol: symbol.to_string(),
                 trade,

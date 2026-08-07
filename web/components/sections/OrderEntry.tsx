@@ -5,7 +5,7 @@ import { submitOrderTimed } from "@/lib/exchange";
 import { useLatencyStore, useMarketStore } from "@/lib/store";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import type { OrderKind, TimeInForce } from "@/lib/types";
+import type { OrderKind, OrderStatus, TimeInForce } from "@/lib/types";
 
 export function OrderEntry({ className }: { className?: string }) {
   const symbol = useMarketStore((s) => s.symbol);
@@ -21,7 +21,15 @@ export function OrderEntry({ className }: { className?: string }) {
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "pending" }
-    | { kind: "rested" | "filled"; qty: number; px: number; latency_ns: number }
+    | {
+        kind: "done";
+        status: OrderStatus;
+        filledQty: number;
+        requestedQty: number;
+        px: number;
+        isMarket: boolean;
+        latency_ns: number;
+      }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
 
@@ -54,11 +62,15 @@ export function OrderEntry({ className }: { className?: string }) {
         kind,
         tif: isMarket ? undefined : tif,
       });
-      recordSubmit(res.latency_ns, res.trades.length > 0);
+      const filledQty = res.trades.reduce((sum, t) => sum + t.qty, 0);
+      recordSubmit(res.latency_ns, filledQty > 0);
       setStatus({
-        kind: res.trades.length > 0 ? "filled" : "rested",
-        qty: parsedQty,
+        kind: "done",
+        status: res.status,
+        filledQty,
+        requestedQty: Math.round(parsedQty),
         px: Math.round(parsedPx ?? 0),
+        isMarket,
         latency_ns: res.latency_ns,
       });
     } catch (err) {
@@ -195,21 +207,29 @@ export function OrderEntry({ className }: { className?: string }) {
           : `${isMarket ? "Market " : ""}${side === "Bid" ? "Buy" : "Sell"}`}
       </button>
 
-      <StatusLine status={status} isMarket={isMarket} />
+      <StatusLine status={status} />
     </form>
   );
 }
 
+type DoneStatus = {
+  kind: "done";
+  status: OrderStatus;
+  filledQty: number;
+  requestedQty: number;
+  px: number;
+  isMarket: boolean;
+  latency_ns: number;
+};
+
 function StatusLine({
   status,
-  isMarket,
 }: {
   status:
     | { kind: "idle" }
     | { kind: "pending" }
-    | { kind: "rested" | "filled"; qty: number; px: number; latency_ns: number }
+    | DoneStatus
     | { kind: "error"; message: string };
-  isMarket: boolean;
 }) {
   const wrapperBase = "min-h-[3.25rem]";
 
@@ -245,32 +265,122 @@ function StatusLine({
     );
   }
 
-  const isFilled = status.kind === "filled";
+  return <DoneLine status={status} wrapperBase={wrapperBase} />;
+}
+
+// Presentation for each engine disposition. `cancelled` is the one the old code
+// mislabeled as "Rested" — it gets the muted ask treatment, never a phantom
+// "@ price", because nothing executed and nothing rests.
+const DISPOSITION: Record<
+  OrderStatus,
+  { label: string; tone: "fill" | "rest" | "dead" }
+> = {
+  filled: { label: "Filled", tone: "fill" },
+  partial: { label: "Partial fill", tone: "fill" },
+  partial_resting: { label: "Partial · resting", tone: "fill" },
+  rested: { label: "Rested", tone: "rest" },
+  cancelled: { label: "Cancelled", tone: "dead" },
+};
+
+function DoneLine({
+  status,
+  wrapperBase,
+}: {
+  status: DoneStatus;
+  wrapperBase: string;
+}) {
+  const { label, tone } = DISPOSITION[status.status];
+  const restingQty = Math.max(status.requestedQty - status.filledQty, 0);
+
+  const toneClasses =
+    tone === "dead"
+      ? "border-ask/25 bg-ask/5"
+      : "border-amber/20 bg-amber/5";
+  const labelColor = tone === "dead" ? "text-ask" : "text-amber";
+
   return (
     <div
       className={cn(
         wrapperBase,
-        "flex flex-col gap-1 rounded-lg border border-amber/20 bg-amber/5 px-3 py-2",
+        "flex flex-col gap-1 rounded-lg border px-3 py-2",
+        toneClasses,
       )}
     >
       <div className="flex items-baseline justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber">
-          {isFilled ? "Filled" : "Rested"}
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-[0.22em]",
+            labelColor,
+          )}
+        >
+          {label}
         </span>
         <span className="font-mono text-[10px] tabular-nums text-fg-dim">
           {(status.latency_ns / 1_000_000).toFixed(2)}
           <span className="ml-0.5">ms</span>
         </span>
       </div>
-      <div className="font-mono text-[13px] tabular-nums text-fg">
-        {status.qty}
-        {!isMarket && (
-          <>
-            <span className="mx-1.5 text-fg-dim">@</span>
-            {formatPrice(status.px)}
-          </>
-        )}
+      <DoneDetail status={status} restingQty={restingQty} />
+    </div>
+  );
+}
+
+function DoneDetail({
+  status,
+  restingQty,
+}: {
+  status: DoneStatus;
+  restingQty: number;
+}) {
+  // Cancelled: nothing executed, nothing resting — say why, don't show a price.
+  if (status.status === "cancelled") {
+    return (
+      <div className="font-mono text-[12px] text-fg-muted">
+        {status.isMarket ? "No liquidity to fill" : "Unfilled — order killed"}
       </div>
+    );
+  }
+
+  const priceSuffix = !status.isMarket && (
+    <>
+      <span className="mx-1.5 text-fg-dim">@</span>
+      {formatPrice(status.px)}
+    </>
+  );
+
+  // Partial (no rest): filled X of the requested Y; remainder discarded.
+  if (status.status === "partial") {
+    return (
+      <div className="font-mono text-[13px] tabular-nums text-fg">
+        {status.filledQty}
+        <span className="mx-1 text-fg-dim">/</span>
+        {status.requestedQty}
+        {priceSuffix}
+        <span className="ml-2 text-[11px] text-fg-dim">
+          {status.requestedQty - status.filledQty} discarded
+        </span>
+      </div>
+    );
+  }
+
+  // Partial + resting: some filled now, remainder working in the book.
+  if (status.status === "partial_resting") {
+    return (
+      <div className="font-mono text-[13px] tabular-nums text-fg">
+        {status.filledQty} filled
+        <span className="mx-1.5 text-fg-dim">·</span>
+        {restingQty} resting
+        {priceSuffix}
+      </div>
+    );
+  }
+
+  // Filled or Rested: the full requested quantity, with price when it has one.
+  const qty = status.status === "filled" ? status.filledQty : status.requestedQty;
+  return (
+    <div className="font-mono text-[13px] tabular-nums text-fg">
+      {qty}
+      {priceSuffix}
     </div>
   );
 }

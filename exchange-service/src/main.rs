@@ -10,7 +10,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use orderbook::{Order, OrderId, OrderKind, Side, Trade};
+use orderbook::{Order, OrderId, OrderKind, OrderStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -162,11 +162,11 @@ async fn submit_order(
         }
     };
 
-    let trades = state.exchange.submit_order(symbol.clone(), order).await
+    let outcome = state.exchange.submit_order(symbol.clone(), order).await
         .ok_or(AppError::SymbolNotFound)?;
 
     // Broadcast trades via WebSocket
-    for trade in &trades {
+    for trade in &outcome.trades {
         let trade_event = TradeEvent {
             symbol: symbol.clone(),
             trade: trade.clone(),
@@ -177,11 +177,24 @@ async fn submit_order(
 
     let response = SubmitOrderResponse {
         order_id: order_id.0,
-        status: if trades.is_empty() { "rested".to_string() } else { "filled".to_string() },
-        trades,
+        status: status_label(outcome.status).to_string(),
+        trades: outcome.trades,
     };
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Maps an engine [`OrderStatus`] to the wire status string returned to clients.
+/// Distinguishes `rested` (order is working in the book) from `cancelled` (order
+/// was killed without resting) — a distinction the trade list alone cannot make.
+fn status_label(status: OrderStatus) -> &'static str {
+    match status {
+        OrderStatus::Filled => "filled",
+        OrderStatus::PartiallyFilled => "partial",
+        OrderStatus::Rested => "rested",
+        OrderStatus::PartiallyFilledResting => "partial_resting",
+        OrderStatus::Cancelled => "cancelled",
+    }
 }
 
 /// Submits a batch of orders to a single symbol under one write lock.
@@ -225,11 +238,11 @@ async fn submit_order_batch(
     let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
     let mut results = Vec::with_capacity(per_order.len());
-    for (idx, (trades, latency_ns)) in per_order.into_iter().enumerate() {
-        let trade_count = trades.len();
+    for (idx, (outcome, latency_ns)) in per_order.into_iter().enumerate() {
+        let trade_count = outcome.trades.len();
         let filled = trade_count > 0;
 
-        for trade in trades {
+        for trade in outcome.trades {
             let _ = state.trade_broadcaster.send(TradeEvent {
                 symbol: symbol.clone(),
                 trade,

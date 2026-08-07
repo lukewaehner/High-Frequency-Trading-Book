@@ -190,9 +190,9 @@ async fn run_driver(
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
 
-                for (trades, latency_ns) in per_order {
-                    let filled = !trades.is_empty();
-                    for trade in trades {
+                for (outcome, latency_ns) in per_order {
+                    let filled = !outcome.trades.is_empty();
+                    for trade in outcome.trades {
                         let _ = trade_tx.send(TradeEvent {
                             symbol: symbol.clone(),
                             trade,

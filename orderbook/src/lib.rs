@@ -8,7 +8,7 @@
 //! - IOC (cancel remainder) and FOK (fill-or-kill) time-in-force
 pub mod types;
 
-pub use types::{Order, OrderId, OrderKind, Side, TimeInForce, Trade};
+pub use types::{Order, OrderId, OrderKind, OrderOutcome, OrderStatus, Side, TimeInForce, Trade};
 pub mod price_levels;
 pub use price_levels::PriceLevels;
 
@@ -43,8 +43,9 @@ impl OrderBook {
     /// - `IOC`  — discard any unfilled remainder; never rests
     /// - `FOK`  — pre-check: if the book cannot fill the entire quantity at the
     ///            requested price, return an empty vec without touching the book
-    pub fn submit(&mut self, mut taker: Order) -> Vec<Trade> {
+    pub fn submit(&mut self, mut taker: Order) -> OrderOutcome {
         let ts_ns = taker.ts_ns;
+        let original_qty = taker.qty;
         let mut trades = Vec::new();
 
         // FOK pre-check: count fillable qty before touching the book.
@@ -54,7 +55,8 @@ impl OrderBook {
                 Side::Ask => self.bids.fillable_qty(taker.px_ticks),
             };
             if available < taker.qty {
-                return trades; // can't fill entirely — kill the order
+                // Can't fill entirely — kill the order without touching the book.
+                return OrderOutcome::new(trades, 0, 0, original_qty);
             }
         }
 
@@ -93,12 +95,6 @@ impl OrderBook {
                         self.asks.push_front(maker);
                     }
                 }
-
-                // Market orders and IOC never rest; Day rests the remainder
-                if taker.qty > 0 && taker.kind == OrderKind::Limit && taker.tif == TimeInForce::Day
-                {
-                    self.bids.push(taker);
-                }
             }
 
             Side::Ask => {
@@ -135,21 +131,34 @@ impl OrderBook {
                         self.bids.push_front(maker);
                     }
                 }
-
-                // Market orders and IOC never rest; Day rests the remainder
-                if taker.qty > 0 && taker.kind == OrderKind::Limit && taker.tif == TimeInForce::Day
-                {
-                    self.asks.push(taker);
-                }
             }
         }
 
-        trades
+        // Resting decision (applied once, after matching): only a Day limit with
+        // an unfilled remainder rests. Market orders and IOC/FOK never rest — any
+        // remainder is discarded, which classifies as PartiallyFilled/Cancelled.
+        let remaining = taker.qty;
+        let rests =
+            remaining > 0 && taker.kind == OrderKind::Limit && taker.tif == TimeInForce::Day;
+        let resting_qty = if rests { remaining } else { 0 };
+        if rests {
+            match taker.side {
+                Side::Bid => self.bids.push(taker),
+                Side::Ask => self.asks.push(taker),
+            }
+        }
+
+        let filled_qty = original_qty - remaining;
+        OrderOutcome::new(trades, filled_qty, resting_qty, original_qty)
     }
 
-    /// Convenience wrapper — equivalent to `submit` for a Day limit order.
+    /// Convenience wrapper returning only the immediate executions. Prefer
+    /// [`OrderBook::submit`] when the order's disposition matters — this drops
+    /// the [`OrderStatus`], so it cannot distinguish a rested order from a
+    /// cancelled one. Kept for the latency/throughput harnesses that only need
+    /// the trade list. Handles every order kind, not just limits.
     pub fn submit_limit(&mut self, order: Order) -> Vec<Trade> {
-        self.submit(order)
+        self.submit(order).trades
     }
 
     /// Returns current best bid price (highest buy price).
@@ -272,7 +281,8 @@ mod ob_tests {
         ob.submit(limit(1, Side::Ask, 100, 30));
         ob.submit(limit(2, Side::Ask, 102, 20));
 
-        let trades = ob.submit(Order::market(OrderId(10), "AAPL", Side::Bid, 40, 10));
+        let out = ob.submit(Order::market(OrderId(10), "AAPL", Side::Bid, 40, 10));
+        let trades = &out.trades;
 
         // Sweeps 30 from the 100 level, then 10 from the 102 level
         assert_eq!(trades.len(), 2);
@@ -280,6 +290,8 @@ mod ob_tests {
         assert_eq!(trades[0].px_ticks, 100);
         assert_eq!(trades[1].qty, 10);
         assert_eq!(trades[1].px_ticks, 102);
+        assert_eq!(out.status, OrderStatus::Filled);
+        assert_eq!(out.filled_qty, 40);
 
         // Market order must never rest even with leftover qty
         assert_eq!(ob.best_bid(), None);
@@ -293,13 +305,15 @@ mod ob_tests {
         ob.submit(limit(1, Side::Bid, 100, 30));
         ob.submit(limit(2, Side::Bid, 98, 20));
 
-        let trades = ob.submit(Order::market(OrderId(10), "AAPL", Side::Ask, 40, 10));
+        let out = ob.submit(Order::market(OrderId(10), "AAPL", Side::Ask, 40, 10));
+        let trades = &out.trades;
 
         assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].qty, 30);
         assert_eq!(trades[0].px_ticks, 100);
         assert_eq!(trades[1].qty, 10);
         assert_eq!(trades[1].px_ticks, 98);
+        assert_eq!(out.status, OrderStatus::Filled);
 
         assert_eq!(ob.best_ask(), None); // never rested
         assert_eq!(ob.best_bid(), Some(98)); // 10 remain at 98
@@ -308,8 +322,11 @@ mod ob_tests {
     #[test]
     fn market_order_empty_book_produces_no_trades_and_does_not_rest() {
         let mut ob = OrderBook::new();
-        let trades = ob.submit(Order::market(OrderId(1), "AAPL", Side::Bid, 100, 1));
-        assert!(trades.is_empty());
+        let out = ob.submit(Order::market(OrderId(1), "AAPL", Side::Bid, 100, 1));
+        assert!(out.trades.is_empty());
+        // A market order with no liquidity is cancelled, NOT rested — an empty
+        // trade list must not be reported as a resting order.
+        assert_eq!(out.status, OrderStatus::Cancelled);
         assert_eq!(ob.best_bid(), None); // must not rest
     }
 
@@ -330,10 +347,13 @@ mod ob_tests {
             kind: OrderKind::Limit,
             tif: TimeInForce::IOC,
         };
-        let trades = ob.submit(ioc);
+        let out = ob.submit(ioc);
 
-        assert_eq!(trades.len(), 1);
-        assert_eq!(trades[0].qty, 30);
+        assert_eq!(out.trades.len(), 1);
+        assert_eq!(out.trades[0].qty, 30);
+        // Filled 30 of 50; the 20 remainder is discarded, not rested.
+        assert_eq!(out.status, OrderStatus::PartiallyFilled);
+        assert_eq!(out.filled_qty, 30);
         // IOC remainder must not rest
         assert_eq!(ob.best_bid(), None);
         assert_eq!(ob.best_ask(), None); // the 30-lot ask was fully consumed
@@ -354,9 +374,10 @@ mod ob_tests {
             kind: OrderKind::Limit,
             tif: TimeInForce::IOC,
         };
-        let trades = ob.submit(ioc);
+        let out = ob.submit(ioc);
 
-        assert!(trades.is_empty());
+        assert!(out.trades.is_empty());
+        assert_eq!(out.status, OrderStatus::Cancelled); // no cross, no rest
         assert_eq!(ob.best_bid(), None); // must not rest
     }
 
@@ -377,10 +398,11 @@ mod ob_tests {
             kind: OrderKind::Limit,
             tif: TimeInForce::FOK,
         };
-        let trades = ob.submit(fok);
+        let out = ob.submit(fok);
 
-        assert_eq!(trades.len(), 1);
-        assert_eq!(trades[0].qty, 50);
+        assert_eq!(out.trades.len(), 1);
+        assert_eq!(out.trades[0].qty, 50);
+        assert_eq!(out.status, OrderStatus::Filled);
         assert_eq!(ob.asks.qty_at_price(100), 10); // 10 remain
     }
 
@@ -399,10 +421,12 @@ mod ob_tests {
             kind: OrderKind::Limit,
             tif: TimeInForce::FOK,
         };
-        let trades = ob.submit(fok);
+        let out = ob.submit(fok);
 
         // Book must be completely unchanged
-        assert!(trades.is_empty());
+        assert!(out.trades.is_empty());
+        // FOK that can't fill in full is cancelled — not rested.
+        assert_eq!(out.status, OrderStatus::Cancelled);
         assert_eq!(ob.asks.qty_at_price(100), 30);
         assert_eq!(ob.best_bid(), None);
     }
@@ -422,9 +446,40 @@ mod ob_tests {
             kind: OrderKind::Limit,
             tif: TimeInForce::FOK,
         };
-        let trades = ob.submit(fok);
+        let out = ob.submit(fok);
 
-        assert!(trades.is_empty());
+        assert!(out.trades.is_empty());
+        assert_eq!(out.status, OrderStatus::Cancelled);
         assert_eq!(ob.asks.qty_at_price(110), 100); // book untouched
+    }
+
+    // --- Resting-disposition tests (Day limits) ---
+
+    #[test]
+    fn day_limit_no_cross_is_rested() {
+        let mut ob = OrderBook::new();
+        ob.submit(limit(1, Side::Ask, 110, 50)); // ask sits above
+
+        let out = ob.submit(limit(2, Side::Bid, 100, 20)); // bid below — no cross
+
+        assert!(out.trades.is_empty());
+        assert_eq!(out.status, OrderStatus::Rested);
+        assert_eq!(out.resting_qty, 20);
+        assert_eq!(ob.best_bid(), Some(100)); // the full order rests
+    }
+
+    #[test]
+    fn day_limit_partial_cross_rests_remainder_is_partially_filled_resting() {
+        let mut ob = OrderBook::new();
+        ob.submit(limit(1, Side::Ask, 100, 30)); // only 30 available at the cross
+
+        let out = ob.submit(limit(2, Side::Bid, 100, 50)); // wants 50 @ 100
+
+        assert_eq!(out.trades.len(), 1);
+        assert_eq!(out.trades[0].qty, 30);
+        assert_eq!(out.filled_qty, 30);
+        assert_eq!(out.resting_qty, 20);
+        assert_eq!(out.status, OrderStatus::PartiallyFilledResting);
+        assert_eq!(ob.best_bid(), Some(100)); // 20 rest at 100
     }
 }

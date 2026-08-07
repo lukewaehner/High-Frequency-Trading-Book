@@ -10,7 +10,7 @@
 //! - Designed for microsecond-level latency in order processing
 
 use dashmap::DashMap;
-use orderbook::{OrderBook, Order, OrderId, Side, Trade};
+use orderbook::{OrderBook, Order, OrderId, OrderOutcome};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
@@ -153,42 +153,40 @@ impl Exchange {
         })
     }
 
-    /// Submits a limit order to the specified symbol's order book.
+    /// Submits an order to the specified symbol's order book.
     /// # Arguments
     /// * `symbol` - Trading symbol for the order
-    /// * `order` - Complete order details including price, quantity, and side
+    /// * `order` - Complete order details including price, quantity, side, and kind
     /// # Returns
-    /// * `Some(Vec<Trade>)` - Vector of trades executed immediately (if any)
+    /// * `Some(OrderOutcome)` - Trades executed plus the order's disposition
     /// * `None` - If symbol doesn't exist
-    pub async fn submit_order(&self, symbol: String, order: Order) -> Option<Vec<Trade>> {
+    pub async fn submit_order(&self, symbol: String, order: Order) -> Option<OrderOutcome> {
         let orderbook_lock = self.orderbooks.get(&symbol)?;
 
         // Acquire write lock
         let mut orderbook = orderbook_lock.write().await;
 
-        // Submit limit order
-        let trades = orderbook.submit_limit(order);
-        Some(trades)
+        Some(orderbook.submit(order))
     }
 
     /// Submits a batch of orders to a single symbol's order book under one
-    /// write lock. Returns per-order (trades, engine_ns) where engine_ns is
-    /// the monotonic time spent inside `submit_limit` for that order only —
-    /// the number to plot in a "true engine latency" histogram.
+    /// write lock. Returns per-order `(OrderOutcome, engine_ns)` where engine_ns
+    /// is the monotonic time spent inside `submit` for that order only — the
+    /// number to plot in a "true engine latency" histogram.
     pub async fn submit_order_batch(
         &self,
         symbol: &str,
         orders: Vec<Order>,
-    ) -> Option<Vec<(Vec<Trade>, u128)>> {
+    ) -> Option<Vec<(OrderOutcome, u128)>> {
         let orderbook_lock = self.orderbooks.get(symbol)?;
         let mut orderbook = orderbook_lock.write().await;
 
         let mut out = Vec::with_capacity(orders.len());
         for order in orders {
             let t0 = Instant::now();
-            let trades = orderbook.submit_limit(order);
+            let outcome = orderbook.submit(order);
             let latency_ns = t0.elapsed().as_nanos();
-            out.push((trades, latency_ns));
+            out.push((outcome, latency_ns));
         }
         Some(out)
     }

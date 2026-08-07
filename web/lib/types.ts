@@ -50,9 +50,19 @@ export interface SubmitOrderRequest {
   tif?: TimeInForce;
 }
 
+// Order disposition reported by the engine. `rested` (working in the book) and
+// `cancelled` (killed without resting) are distinct — an empty `trades` array
+// can be either, so read `status` rather than inferring from trade count.
+export type OrderStatus =
+  | "filled"
+  | "partial"
+  | "rested"
+  | "partial_resting"
+  | "cancelled";
+
 export interface SubmitOrderResponse {
   order_id: number;
-  status: string;
+  status: OrderStatus;
   trades: Trade[];
 }
 

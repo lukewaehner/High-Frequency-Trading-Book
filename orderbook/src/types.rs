@@ -80,6 +80,59 @@ pub struct Trade {
     pub ts_ns: u128,   // Execution timestamp
 }
 
+/// Disposition of a submitted order once matching has run to completion.
+///
+/// This distinguishes the two cases that an empty trade list cannot: an order
+/// that came to rest in the book (`Rested`) versus one that was killed without
+/// resting (`Cancelled`). Callers must report `status` rather than inferring
+/// disposition from the trade list — a Market/IOC/FOK order that finds no
+/// liquidity produces no trades yet is *cancelled*, not *rested*.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrderStatus {
+    /// Entire quantity executed immediately.
+    Filled,
+    /// Part executed immediately; the remainder was discarded because the order
+    /// does not rest (a Market order, or a limit with IOC).
+    PartiallyFilled,
+    /// Nothing executed; the full quantity now rests in the book (Day limit).
+    Rested,
+    /// Part executed immediately; the remainder now rests in the book (Day limit).
+    PartiallyFilledResting,
+    /// Nothing executed and nothing rests — the order was killed (a FOK that
+    /// could not fill in full, or an IOC/Market that found no liquidity).
+    Cancelled,
+}
+
+/// Full result of submitting an order: the trades it generated, how much of it
+/// executed, how much (if any) now rests, and the resulting [`OrderStatus`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderOutcome {
+    /// Immediate executions produced by this submission.
+    pub trades: Vec<Trade>,
+    /// Quantity executed across all `trades`.
+    pub filled_qty: i64,
+    /// Quantity now resting in the book (0 unless `status` is a resting variant).
+    pub resting_qty: i64,
+    /// Disposition of the order.
+    pub status: OrderStatus,
+}
+
+impl OrderOutcome {
+    /// Builds an outcome, deriving [`OrderStatus`] from the executed, resting,
+    /// and original quantities. `resting_qty > 0` is only ever passed for orders
+    /// that actually came to rest; a discarded remainder is *not* resting.
+    pub fn new(trades: Vec<Trade>, filled_qty: i64, resting_qty: i64, original_qty: i64) -> Self {
+        let status = match (filled_qty, resting_qty) {
+            (0, 0) => OrderStatus::Cancelled,
+            (0, _) => OrderStatus::Rested,
+            (f, 0) if f >= original_qty => OrderStatus::Filled,
+            (_, 0) => OrderStatus::PartiallyFilled,
+            (_, _) => OrderStatus::PartiallyFilledResting,
+        };
+        Self { trades, filled_qty, resting_qty, status }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
