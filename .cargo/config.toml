@@ -1,0 +1,10 @@
+# Build for the machine we run the latency sim on. `target-cpu=native` lets the
+# compiler use the host's full instruction set (AVX2/BMI2/etc.) instead of the
+# conservative baseline, which measurably helps the tight integer matching loop.
+#
+# Trade-off: binaries built here are NOT portable to an older/different CPU. This
+# repo is a self-hosted simulator, so that's the right default. If you ever ship
+# a binary to heterogeneous hardware, delete this file or set an explicit
+# `target-cpu` baseline (e.g. `x86-64-v2`).
+[build]
+rustflags = ["-C", "target-cpu=native"]
