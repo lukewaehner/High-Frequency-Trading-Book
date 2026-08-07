@@ -2,6 +2,7 @@
 
 use orderbook::{OrderKind, Side, TimeInForce, Trade};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Request to submit an order. `kind` defaults to `Limit`, `tif` defaults to `Day`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,7 +128,10 @@ pub struct MarketDepth {
 /// Trade execution event for WebSocket streaming.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeEvent {
-    pub symbol: String,
+    /// `Arc<str>` so the fan-out — one event per trade, per subscriber — shares
+    /// the book's symbol via an atomic refcount instead of a fresh heap copy.
+    /// Serializes as a plain string; the wire format is unchanged.
+    pub symbol: Arc<str>,
     pub trade: Trade,
     pub timestamp: u64,
 }
@@ -208,4 +212,36 @@ pub struct LatencySample {
     pub latency_ns: u64,
     pub filled: bool,
     pub ts_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orderbook::OrderId;
+
+    /// The `Arc<str>` symbols on `TradeEvent`/`Trade` are an internal allocation
+    /// optimization; on the wire they must remain plain JSON strings, and order
+    /// ids plain numbers, so the web/CLI clients are unaffected.
+    #[test]
+    fn trade_event_serializes_symbols_as_strings_and_ids_as_numbers() {
+        let event = TradeEvent {
+            symbol: Arc::from("AAPL"),
+            trade: Trade {
+                maker: OrderId(1),
+                taker: OrderId(2),
+                symbol: Arc::from("AAPL"),
+                px_ticks: 10_000,
+                qty: 5,
+                ts_ns: 42,
+            },
+            timestamp: 1_234,
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+
+        assert_eq!(json["symbol"], "AAPL");
+        assert_eq!(json["trade"]["symbol"], "AAPL");
+        assert_eq!(json["trade"]["maker"], 1);
+        assert_eq!(json["trade"]["taker"], 2);
+    }
 }

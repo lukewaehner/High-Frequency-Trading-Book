@@ -64,7 +64,7 @@ pub async fn handle_trade_stream(socket: WebSocket, symbol: String, state: AppSt
             trade_result = trade_rx.recv() => {
                 match trade_result {
                     Ok(trade_event) => {
-                        if trade_event.symbol == symbol {
+                        if trade_event.symbol.as_ref() == symbol.as_str() {
                             let ws_msg = WebSocketMessage::Trade(trade_event);
                             if let Ok(json) = serde_json::to_string(&ws_msg) {
                                 if sender.send(Message::Text(json)).await.is_err() {
@@ -366,7 +366,7 @@ async fn process_batch(
 
         for trade in outcome.trades {
             let _ = state.trade_broadcaster.send(TradeEvent {
-                symbol: symbol.to_string(),
+                symbol: sym.clone(),
                 trade,
                 timestamp: trade_ts,
             });

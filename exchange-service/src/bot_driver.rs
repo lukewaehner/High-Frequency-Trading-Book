@@ -203,7 +203,7 @@ async fn run_driver(
                     let filled = !outcome.trades.is_empty();
                     for trade in outcome.trades {
                         let _ = trade_tx.send(TradeEvent {
-                            symbol: symbol.clone(),
+                            symbol: sym.clone(),
                             trade,
                             timestamp: now_ms,
                         });

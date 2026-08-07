@@ -185,7 +185,7 @@ async fn submit_order(
     let trade_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     for trade in &outcome.trades {
         let trade_event = TradeEvent {
-            symbol: symbol.clone(),
+            symbol: sym.clone(),
             trade: trade.clone(),
             timestamp: trade_ts,
         };
@@ -266,7 +266,7 @@ async fn submit_order_batch(
 
         for trade in outcome.trades {
             let _ = state.trade_broadcaster.send(TradeEvent {
-                symbol: symbol.clone(),
+                symbol: sym.clone(),
                 trade,
                 timestamp: trade_ts,
             });
