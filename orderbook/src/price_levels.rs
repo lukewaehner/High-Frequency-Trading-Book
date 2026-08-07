@@ -1,5 +1,17 @@
 use crate::types::{Order, OrderId, Side};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::{BTreeMap, VecDeque};
+
+/// Outcome of filling the best price level once, in place.
+pub enum Fill {
+    /// A maker was (partially or fully) filled. `maker` is its id, `qty` the
+    /// amount matched. When the maker was fully consumed it has been popped and
+    /// de-indexed; a partial fill leaves it at the front for the next taker.
+    Matched { maker: OrderId, qty: i64 },
+    /// The level existed but held only cancelled orders; it has been removed and
+    /// the caller should re-evaluate the (new) best price.
+    Swept,
+}
 
 // Structured price levels based, FIFO tracking with BTreeMap
 // side determines which end of the map is the best
@@ -11,8 +23,10 @@ pub struct PriceLevels {
     /// price ticks (i64) mapped to orders at the price
     /// stored in a queu or orders waiting to be filled
     levels: BTreeMap<i64, VecDeque<Order>>,
-    index: HashMap<OrderId, i64>,
-    canceled: HashSet<OrderId>,
+    // Fast (non-cryptographic) hashing: these are hit on every push/pop/cancel
+    // with u128 keys, where SipHash dominates the operation cost.
+    index: FxHashMap<OrderId, i64>,
+    canceled: FxHashSet<OrderId>,
 }
 
 impl PriceLevels {
@@ -21,8 +35,8 @@ impl PriceLevels {
         Self {
             side,
             levels: BTreeMap::new(),
-            index: HashMap::new(),
-            canceled: HashSet::new(),
+            index: FxHashMap::default(),
+            canceled: FxHashSet::default(),
         }
     }
 
@@ -114,6 +128,51 @@ impl PriceLevels {
                 self.levels.remove(&px);
             }
         }
+    }
+
+    /// Fills up to `want` shares against the front live order of the level at
+    /// `px`, mutating the resting maker in place. `px` must be the current best
+    /// price for this side — the caller checks the cross before calling.
+    ///
+    /// This is the matching-loop primitive that replaces pop-best-then-push-front:
+    /// a partially filled maker stays at the queue front with no BTree re-insert
+    /// and no id-index insert, and a fully consumed maker is popped exactly once.
+    /// Leading cancelled orders are discarded first (they were removed from the
+    /// index at cancel time, so only the `canceled` set needs clearing).
+    ///
+    /// Returns `None` only if no level exists at `px` (never happens when called
+    /// with a price just returned by [`best_price`](Self::best_price)).
+    pub fn fill_front(&mut self, px: i64, want: i64) -> Option<Fill> {
+        let q = self.levels.get_mut(&px)?;
+
+        // Skip cancelled orders resting at the front of the queue.
+        while let Some(front_id) = q.front().map(|o| o.id) {
+            if self.canceled.remove(&front_id) {
+                q.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        let result = match q.front_mut() {
+            None => Fill::Swept, // level held only cancelled orders
+            Some(maker) => {
+                let fill = want.min(maker.qty);
+                maker.qty -= fill;
+                let maker_id = maker.id;
+                if maker.qty == 0 {
+                    q.pop_front();
+                    self.index.remove(&maker_id);
+                }
+                Fill::Matched { maker: maker_id, qty: fill }
+            }
+        };
+
+        // Drop the level once it is empty (fully consumed or fully swept).
+        if q.is_empty() {
+            self.levels.remove(&px);
+        }
+        Some(result)
     }
 
     /// Sets an order to be canceled

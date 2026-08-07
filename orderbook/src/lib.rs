@@ -11,6 +11,7 @@ pub mod types;
 pub use types::{Order, OrderId, OrderKind, OrderOutcome, OrderStatus, Side, TimeInForce, Trade};
 pub mod price_levels;
 pub use price_levels::PriceLevels;
+use price_levels::Fill;
 
 /// Central limit order book with separate bid/ask sides.
 ///
@@ -62,7 +63,10 @@ impl OrderBook {
 
         match taker.side {
             Side::Bid => {
-                // Match against asks (sell orders)
+                // Match against asks (sell orders). The maker is filled in place:
+                // a partial fill leaves it at the front of its level (no BTree
+                // re-insert, no id-index churn), and the taker's remaining qty
+                // drives the loop.
                 while taker.qty > 0 {
                     let Some(best_ask_px) = self.asks.best_price() else {
                         break; // No asks available
@@ -72,33 +76,29 @@ impl OrderBook {
                         break; // No cross - bid too low
                     }
 
-                    let mut maker = match self.asks.pop_best() {
-                        Some(o) => o,
-                        None => break,
-                    };
-
-                    let fill = taker.qty.min(maker.qty);
-                    taker.qty -= fill;
-                    maker.qty -= fill;
-
-                    trades.push(Trade {
-                        maker: maker.id,
-                        taker: taker.id,
-                        symbol: taker.symbol.clone(),
-                        px_ticks: best_ask_px, // Trade at maker's price
-                        qty: fill,
-                        ts_ns,
-                    });
-
-                    // Restore partially filled maker to front of queue
-                    if maker.qty > 0 {
-                        self.asks.push_front(maker);
+                    match self.asks.fill_front(best_ask_px, taker.qty) {
+                        Some(Fill::Matched { maker, qty }) => {
+                            taker.qty -= qty;
+                            trades.push(Trade {
+                                maker,
+                                taker: taker.id,
+                                symbol: taker.symbol.clone(), // Arc bump, not a heap copy
+                                px_ticks: best_ask_px,        // Trade at maker's price
+                                qty,
+                                ts_ns,
+                            });
+                        }
+                        // Level held only cancelled orders and was swept; the next
+                        // iteration re-reads the new best price.
+                        Some(Fill::Swept) => {}
+                        None => break, // best_price() said Some, so this is unreachable
                     }
                 }
             }
 
             Side::Ask => {
-                // Match against bids (buy orders)
+                // Match against bids (buy orders); see the Bid arm for the
+                // in-place fill rationale.
                 while taker.qty > 0 {
                     let Some(best_bid_px) = self.bids.best_price() else {
                         break; // No bids available
@@ -108,27 +108,20 @@ impl OrderBook {
                         break; // No cross - ask too high
                     }
 
-                    let mut maker = match self.bids.pop_best() {
-                        Some(o) => o,
+                    match self.bids.fill_front(best_bid_px, taker.qty) {
+                        Some(Fill::Matched { maker, qty }) => {
+                            taker.qty -= qty;
+                            trades.push(Trade {
+                                maker,
+                                taker: taker.id,
+                                symbol: taker.symbol.clone(),
+                                px_ticks: best_bid_px,
+                                qty,
+                                ts_ns,
+                            });
+                        }
+                        Some(Fill::Swept) => {}
                         None => break,
-                    };
-
-                    let fill = taker.qty.min(maker.qty);
-                    taker.qty -= fill;
-                    maker.qty -= fill;
-
-                    trades.push(Trade {
-                        maker: maker.id,
-                        taker: taker.id,
-                        symbol: taker.symbol.clone(),
-                        px_ticks: best_bid_px, // Trade at maker's price
-                        qty: fill,
-                        ts_ns,
-                    });
-
-                    // Restore partially filled maker to front of queue
-                    if maker.qty > 0 {
-                        self.bids.push_front(maker);
                     }
                 }
             }
@@ -466,6 +459,45 @@ mod ob_tests {
         assert_eq!(out.status, OrderStatus::Rested);
         assert_eq!(out.resting_qty, 20);
         assert_eq!(ob.best_bid(), Some(100)); // the full order rests
+    }
+
+    // --- Cancelled-maker handling during matching (fill_front skip + sweep) ---
+
+    /// A cancelled maker at the front of a level must be skipped, and the taker
+    /// matched against the next live maker behind it.
+    #[test]
+    fn matching_skips_cancelled_maker_at_front() {
+        let mut ob = OrderBook::new();
+        ob.submit(limit(1, Side::Ask, 100, 50)); // front of the 100 level
+        ob.submit(limit(2, Side::Ask, 100, 40)); // behind order 1, same level
+
+        // Cancel the first-in-line maker; it must not trade.
+        assert!(ob.asks.cancel(OrderId(1)));
+
+        let out = ob.submit(limit(10, Side::Bid, 100, 30));
+
+        assert_eq!(out.trades.len(), 1);
+        assert_eq!(out.trades[0].maker, OrderId(2)); // order 1 was cancelled
+        assert_eq!(out.trades[0].qty, 30);
+        // Order 2 has 10 left resting at 100; order 1 is gone.
+        assert_eq!(ob.best_ask(), Some(100));
+        assert_eq!(ob.asks.qty_at_price(100), 10);
+    }
+
+    /// When the only orders at the crossing level are cancelled, the level is
+    /// swept and a Day limit rests rather than trading against a ghost.
+    #[test]
+    fn matching_sweeps_fully_cancelled_level_then_rests() {
+        let mut ob = OrderBook::new();
+        ob.submit(limit(1, Side::Ask, 100, 50));
+        assert!(ob.asks.cancel(OrderId(1)));
+
+        let out = ob.submit(limit(10, Side::Bid, 100, 30));
+
+        assert!(out.trades.is_empty());
+        assert_eq!(out.status, OrderStatus::Rested);
+        assert_eq!(ob.best_ask(), None); // swept
+        assert_eq!(ob.best_bid(), Some(100)); // the bid rests
     }
 
     #[test]
