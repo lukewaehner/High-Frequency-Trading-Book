@@ -13,6 +13,45 @@ pub enum Fill {
     Swept,
 }
 
+/// Concrete iterator over price levels in matching priority (best→worst),
+/// yielding `(price, total_live_qty)`. Exists so [`PriceLevels::iter_levels_best_first`]
+/// can return a real type instead of a `Box<dyn Iterator>`, avoiding a heap
+/// allocation and virtual dispatch on every depth query. The two variants hold
+/// the forward (ask, low→high) and reversed (bid, high→low) BTree iterators.
+pub enum LevelIter<'a> {
+    Asc {
+        inner: std::collections::btree_map::Iter<'a, i64, VecDeque<Order>>,
+        canceled: &'a FxHashSet<OrderId>,
+    },
+    Desc {
+        inner: std::iter::Rev<std::collections::btree_map::Iter<'a, i64, VecDeque<Order>>>,
+        canceled: &'a FxHashSet<OrderId>,
+    },
+}
+
+impl Iterator for LevelIter<'_> {
+    type Item = (i64, i64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (px, q, canceled) = match self {
+            LevelIter::Asc { inner, canceled } => {
+                let (px, q) = inner.next()?;
+                (*px, q, *canceled)
+            }
+            LevelIter::Desc { inner, canceled } => {
+                let (px, q) = inner.next()?;
+                (*px, q, *canceled)
+            }
+        };
+        let total_qty: i64 = q
+            .iter()
+            .filter(|order| !canceled.contains(&order.id))
+            .map(|order| order.qty)
+            .sum();
+        Some((px, total_qty))
+    }
+}
+
 // Structured price levels based, FIFO tracking with BTreeMap
 // side determines which end of the map is the best
 // - Asks: lowest price is best (front of map)
@@ -246,27 +285,20 @@ impl PriceLevels {
         }
     }
 
-    /// Iterate prices in matching priority (best→worst) with total qty per price.
-    pub fn iter_levels_best_first(&self) -> Box<dyn Iterator<Item = (i64, i64)> + '_> {
+    /// Iterate prices in matching priority (best→worst) with total live qty per
+    /// price. Returns a concrete [`LevelIter`] rather than a boxed trait object,
+    /// so each depth query avoids a heap allocation and virtual dispatch.
+    pub fn iter_levels_best_first(&self) -> LevelIter<'_> {
+        // Asks match low→high (natural BTree order); bids match high→low (reversed).
         match self.side {
-            Side::Ask => {
-                Box::new(self.levels.iter().map(move |(px, q)| {
-                    let total_qty: i64 = q.iter()
-                        .filter(|order| !self.canceled.contains(&order.id))
-                        .map(|order| order.qty)
-                        .sum();
-                    (*px, total_qty)
-                }))
-            }
-            Side::Bid => {
-                Box::new(self.levels.iter().rev().map(move |(px, q)| {
-                    let total_qty: i64 = q.iter()
-                        .filter(|order| !self.canceled.contains(&order.id))
-                        .map(|order| order.qty)
-                        .sum();
-                    (*px, total_qty)
-                }))
-            }
+            Side::Ask => LevelIter::Asc {
+                inner: self.levels.iter(),
+                canceled: &self.canceled,
+            },
+            Side::Bid => LevelIter::Desc {
+                inner: self.levels.iter().rev(),
+                canceled: &self.canceled,
+            },
         }
     }
 
