@@ -14,7 +14,10 @@ use orderbook::{Order, OrderId, OrderKind, OrderStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{broadcast, RwLock};
@@ -29,6 +32,17 @@ mod types;
 use bot_driver::BotDriver;
 use exchange::Exchange;
 use types::*;
+
+/// Monotonic order-id source shared across every ingress path (REST, batch, WS,
+/// bot driver). Replaces UUIDv4 generation — a `getrandom` syscall per order —
+/// with a relaxed atomic increment. Ids only need to be unique within this
+/// process, and serialize as a plain number, so the wire format is unchanged.
+static ORDER_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Returns the next process-unique order id.
+pub fn next_order_id() -> OrderId {
+    OrderId(ORDER_SEQ.fetch_add(1, Ordering::Relaxed) as u128)
+}
 
 #[tokio::main]
 async fn main() {
@@ -144,15 +158,16 @@ async fn submit_order(
     State(state): State<AppState>,
     Json(request): Json<SubmitOrderRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
-    
+    let order_id = next_order_id();
+    let sym: Arc<str> = Arc::from(symbol.as_str());
+
     let ts_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let order = if request.kind == OrderKind::Market {
-        Order::market(order_id, &symbol, request.side, request.quantity, ts_ns)
+        Order::market(order_id, sym.clone(), request.side, request.quantity, ts_ns)
     } else {
         Order {
             id: order_id,
-            symbol: symbol.clone(),
+            symbol: sym.clone(),
             side: request.side,
             px_ticks: request.price,
             qty: request.quantity,
@@ -165,12 +180,14 @@ async fn submit_order(
     let outcome = state.exchange.submit_order(symbol.clone(), order).await
         .ok_or(AppError::SymbolNotFound)?;
 
-    // Broadcast trades via WebSocket
+    // Broadcast trades via WebSocket. Timestamp once for the whole batch of
+    // trades rather than calling the clock per trade.
+    let trade_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     for trade in &outcome.trades {
         let trade_event = TradeEvent {
             symbol: symbol.clone(),
             trade: trade.clone(),
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            timestamp: trade_ts,
         };
         let _ = state.trade_broadcaster.send(trade_event);
     }
@@ -207,18 +224,21 @@ async fn submit_order_batch(
     Json(request): Json<BatchSubmitRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    // Allocate the symbol once for the whole batch; each order shares it via an
+    // atomic refcount rather than its own heap copy.
+    let sym: Arc<str> = Arc::from(symbol.as_str());
 
     let mut order_ids = Vec::with_capacity(request.orders.len());
     let mut orders = Vec::with_capacity(request.orders.len());
     for req in request.orders {
-        let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
+        let order_id = next_order_id();
         order_ids.push(order_id.0);
         orders.push(if req.kind == OrderKind::Market {
-            Order::market(order_id, &symbol, req.side, req.quantity, now_ns)
+            Order::market(order_id, sym.clone(), req.side, req.quantity, now_ns)
         } else {
             Order {
                 id: order_id,
-                symbol: symbol.clone(),
+                symbol: sym.clone(),
                 side: req.side,
                 px_ticks: req.price,
                 qty: req.quantity,
@@ -237,6 +257,8 @@ async fn submit_order_batch(
         .ok_or(AppError::SymbolNotFound)?;
     let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
+    // One clock read for all broadcasts from this batch.
+    let trade_ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     let mut results = Vec::with_capacity(per_order.len());
     for (idx, (outcome, latency_ns)) in per_order.into_iter().enumerate() {
         let trade_count = outcome.trades.len();
@@ -246,7 +268,7 @@ async fn submit_order_batch(
             let _ = state.trade_broadcaster.send(TradeEvent {
                 symbol: symbol.clone(),
                 trade,
-                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+                timestamp: trade_ts,
             });
         }
 

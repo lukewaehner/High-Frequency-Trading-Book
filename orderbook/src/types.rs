@@ -4,6 +4,7 @@
 //! Timestamps are nanoseconds since epoch for high-precision time priority.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Order side - Bid (buy) or Ask (sell).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +43,11 @@ pub struct OrderId(pub u128);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Order {
     pub id: OrderId,
-    pub symbol: String,
+    /// Ticker symbol. `Arc<str>` rather than `String` so a book can hand every
+    /// resulting trade a cheap (atomic-refcount) clone of its symbol instead of
+    /// allocating a fresh `String` per fill in the matching loop. Serializes as
+    /// a plain string, so the wire format is unchanged.
+    pub symbol: Arc<str>,
     pub side: Side,
     pub px_ticks: i64,       // Price in integer ticks; i64::MAX/MIN for market orders
     pub qty: i64,            // Quantity in shares/lots
@@ -53,19 +58,23 @@ pub struct Order {
 
 impl Order {
     /// Limit order: rests in book if not immediately matched.
-    pub fn limit(id: OrderId, symbol: &str, side: Side, px_ticks: i64, qty: i64, ts_ns: u128) -> Self {
-        Self { id, symbol: symbol.to_string(), side, px_ticks, qty, ts_ns, kind: OrderKind::Limit, tif: TimeInForce::Day }
+    ///
+    /// `symbol` accepts anything convertible into `Arc<str>`: pass a `&str` to
+    /// allocate once, or an existing `Arc<str>` to share it for free — the latter
+    /// lets a caller building a batch allocate the symbol a single time.
+    pub fn limit(id: OrderId, symbol: impl Into<Arc<str>>, side: Side, px_ticks: i64, qty: i64, ts_ns: u128) -> Self {
+        Self { id, symbol: symbol.into(), side, px_ticks, qty, ts_ns, kind: OrderKind::Limit, tif: TimeInForce::Day }
     }
 
     /// Market order: crosses at any available price; remainder is always discarded (IOC semantics).
     /// Uses sentinel prices (i64::MAX for buys, i64::MIN for sells) so the existing
     /// crossing logic works without any special-casing.
-    pub fn market(id: OrderId, symbol: &str, side: Side, qty: i64, ts_ns: u128) -> Self {
+    pub fn market(id: OrderId, symbol: impl Into<Arc<str>>, side: Side, qty: i64, ts_ns: u128) -> Self {
         let px_ticks = match side {
             Side::Bid => i64::MAX,
             Side::Ask => i64::MIN,
         };
-        Self { id, symbol: symbol.to_string(), side, px_ticks, qty, ts_ns, kind: OrderKind::Market, tif: TimeInForce::IOC }
+        Self { id, symbol: symbol.into(), side, px_ticks, qty, ts_ns, kind: OrderKind::Market, tif: TimeInForce::IOC }
     }
 }
 
@@ -74,7 +83,7 @@ impl Order {
 pub struct Trade {
     pub maker: OrderId, // Resting order (provides liquidity)
     pub taker: OrderId, // Incoming order (takes liquidity)
-    pub symbol: String,
+    pub symbol: Arc<str>, // Shared with the book/order; clone is an atomic refcount bump
     pub px_ticks: i64, // Execution price (always maker's price)
     pub qty: i64,      // Quantity traded
     pub ts_ns: u128,   // Execution timestamp
@@ -141,7 +150,7 @@ mod tests {
     fn test_order_creation() {
         let o = Order {
             id: OrderId(1),
-            symbol: "AAPL".to_string(),
+            symbol: "AAPL".into(),
             side: Side::Bid,
             px_ticks: 195_430,
             qty: 100,

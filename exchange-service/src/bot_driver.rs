@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use orderbook::{Order, OrderId, Side};
+use orderbook::{Order, Side};
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio::time::interval;
 use tracing::{info, warn};
@@ -115,6 +115,9 @@ async fn run_driver(
     mut cancel_rx: watch::Receiver<bool>,
 ) {
     let symbol = config.symbol.clone();
+    // The symbol is fixed for this driver's lifetime — allocate the Arc once and
+    // hand every synthesized order a cheap refcount clone.
+    let sym: Arc<str> = Arc::from(symbol.as_str());
     let mut tick = interval(Duration::from_millis(config.tick_ms.max(1)));
     let mut rng = XorShiftRng::seed();
 
@@ -141,6 +144,12 @@ async fn run_driver(
                 if total == 0 {
                     continue;
                 }
+                // One clock read per tick for all orders built below, instead of
+                // a syscall per synthesized order.
+                let order_now_ns = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
                 let mut orders = Vec::with_capacity(total);
 
                 for _ in 0..config.makers {
@@ -153,7 +162,7 @@ async fn run_driver(
                         Side::Ask => reference_mid + offset,
                     };
                     let qty = 10 + (rng.next_f64() * 80.0) as i64;
-                    orders.push(make_order(&symbol, side, price, qty));
+                    orders.push(make_order(sym.clone(), side, price, qty, order_now_ns));
                 }
 
                 for _ in 0..config.takers {
@@ -177,7 +186,7 @@ async fn run_driver(
                         }
                     };
                     let qty = 5 + (rng.next_f64() * 50.0) as i64;
-                    orders.push(make_order(&symbol, side, price, qty));
+                    orders.push(make_order(sym.clone(), side, price, qty, order_now_ns));
                 }
 
                 let Some(per_order) = exchange.submit_order_batch(&symbol, orders).await else {
@@ -212,12 +221,8 @@ async fn run_driver(
     info!("bot_driver: task exited for {}", symbol);
 }
 
-fn make_order(symbol: &str, side: Side, price: i64, qty: i64) -> Order {
-    let now_ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    Order::limit(OrderId(uuid::Uuid::new_v4().as_u128()), symbol, side, price, qty, now_ns)
+fn make_order(symbol: Arc<str>, side: Side, price: i64, qty: i64, ts_ns: u128) -> Order {
+    Order::limit(crate::next_order_id(), symbol, side, price, qty, ts_ns)
 }
 
 struct XorShiftRng(u64);

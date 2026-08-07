@@ -5,7 +5,8 @@
 
 use axum::extract::ws::{Message, WebSocket};
 use futures::{sink::SinkExt, stream::StreamExt};
-use orderbook::{Order, OrderId, OrderKind};
+use orderbook::{Order, OrderKind};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::time::interval;
@@ -320,18 +321,20 @@ async fn process_batch(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    // Allocate the symbol once; orders share it via an atomic refcount.
+    let sym: Arc<str> = Arc::from(symbol);
 
     let mut order_ids = Vec::with_capacity(req.orders.len());
     let mut orders = Vec::with_capacity(req.orders.len());
     for o in req.orders {
-        let order_id = OrderId(uuid::Uuid::new_v4().as_u128());
+        let order_id = crate::next_order_id();
         order_ids.push(order_id.0);
         orders.push(if o.kind == OrderKind::Market {
-            Order::market(order_id, symbol, o.side, o.quantity, now_ns)
+            Order::market(order_id, sym.clone(), o.side, o.quantity, now_ns)
         } else {
             Order {
                 id: order_id,
-                symbol: symbol.to_string(),
+                symbol: sym.clone(),
                 side: o.side,
                 px_ticks: o.price,
                 qty: o.quantity,
@@ -350,6 +353,12 @@ async fn process_batch(
         .ok_or((req.seq, "symbol not found".to_string()))?;
     let engine_ns = batch_t0.elapsed().as_nanos() as u64;
 
+    // One clock read for every trade broadcast from this batch, rather than a
+    // syscall per trade.
+    let trade_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
     let mut results = Vec::with_capacity(per_order.len());
     for (idx, (outcome, latency_ns)) in per_order.into_iter().enumerate() {
         let trade_count = outcome.trades.len();
@@ -359,10 +368,7 @@ async fn process_batch(
             let _ = state.trade_broadcaster.send(TradeEvent {
                 symbol: symbol.to_string(),
                 trade,
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
+                timestamp: trade_ts,
             });
         }
 
